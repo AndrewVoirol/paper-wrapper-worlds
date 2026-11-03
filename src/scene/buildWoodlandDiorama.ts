@@ -1,8 +1,10 @@
 import * as THREE from 'three/webgpu';
 import {
   type PaperSceneUniforms,
+  WATER_LEVEL_Y,
   createPaperShingleMaterial,
   createFoldedPaperLeafGeometry,
+  createOrigamiFloatingLeafGeometry,
   createSculptedPaperTrunkGeometry,
   createFoldedPaperLimbGeometry,
   evalShorelineZJS,
@@ -29,94 +31,106 @@ export interface WoodlandDioramaAssets {
 }
 
 /**
- * Builds the tightly bound (~6.3m span) Paper-Wrapper Woodland Diorama:
- * 0. Concave Wet-on-Wet Botanical Watercolor Sky Wash (`skyMesh`, `renderOrder = 0`)
- *    feathering seamlessly into the `#f2ebd9` Washi paper backdrop behind the canopy.
- * 1. 6-Sheet Layered Torn Deckle-Paper Embankment Island (`bankMesh`, `renderOrder = 2`).
- * 2. Tucked shoreline folded-paper limestone slabs & stone cairn.
- * 3. Sculpted 6-Sleeve Accordion-Pleated Paper Trunks + 14 Angled Paper Boughs (`trunkInstanced`),
- *    terminating cleanly inside the arching paper tree canopy.
- * 4. Vaulted Kirigami 3-Blade V-Folded Paper Canopy Crown (`folMesh`) bounding the top (`+Y`)
- *    of the diorama with crisp flat-faceted folded paper leaves + floating pond leaves.
- * 5. Oval Kubelka-Munk Watercolor Pond (`pondMesh`, `renderOrder = 4`) reflecting the sky & canopy.
+ * Builds the Compressed Origami × Watercolor Washi Woodland Cove Diorama (`IMG_0382.DNG` scale & split):
+ * 0. Upright & Planar-Reflected Wet-on-Wet Sky Wash (`skyMesh`, `skyReflMesh`, `renderOrder = 0`)
+ *    with right-hand low afternoon sun clearing (`x ≈ +2.35, y ≈ +2.28`).
+ * 1. Non-Indexed Angular-Faceted & Tucked Cove Embankment (`bankMesh`, `y >= WATER_LEVEL_Y`, `z <= shoreZ`).
+ * 2. Origami Folded Limestone Slabs, Right-Bank Cairn & 2-Post Trailhead Placard (+ planar reflections).
+ * 3. 24 Multi-Depth Tall Creased Bark-Sheet Trunks (`3.8m – 5.9m`, ~4× guardian height) + Upward V-Branches.
+ * 4. 3D Compressed Accordion-Pleated Origami Bough Fans grouped into 3 broad watercolor color regions
+ *    with deliberate open vertical sky slits + 16 V-folded floating pond leaves.
+ * 5. Foreground Kubelka-Munk Olive-Tannin Watercolor Pond Surface (`pondMesh`, `renderOrder = 4`).
  */
 export function buildWoodlandDiorama(uniforms: PaperSceneUniforms): WoodlandDioramaAssets {
   const rand = createSeededRandom(77123);
   const rootGroup = new THREE.Group();
+  const reflPlaneMat = new THREE.Matrix4().makeScale(1, -1, 1).setPosition(0, 2 * WATER_LEVEL_Y, 0);
+  const dummy = new THREE.Matrix4();
+  const dummyRefl = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
 
   // ============================================================================
-  // 0. SUBTLE WET-ON-WET WATERCOLOR SKY WASH BACKDROP (`renderOrder = 0`)
+  // 0. UPRIGHT & REFLECTED WET-ON-WET WATERCOLOR SKY WASH (`renderOrder = 0`)
   // ============================================================================
-  // Broad, flat/gently-cupped background wash plane behind the woodland (`z ≈ -2.85m`)
-  // so it never wraps weirdly around the side flanks and rises cleanly ABOVE the canopy arch!
-  const skyGeom = new THREE.PlaneGeometry(9.6, 4.9, 64, 48);
-  const skyPos = skyGeom.attributes.position as THREE.BufferAttribute;
-  for (let i = 0; i < skyPos.count; i++) {
-    const sx = skyPos.getX(i);
-    const sy = skyPos.getY(i);
-    skyPos.setXYZ(i, sx, sy + 2.28, -2.85 + sx * sx * 0.028);
-  }
-  skyGeom.computeVertexNormals();
-  const skyMat = createWatercolorSkyMaterial(uniforms);
-  const skyMesh = new THREE.Mesh(skyGeom, skyMat);
-  skyMesh.renderOrder = 0;
+  const buildSkyPlane = (isReflected: boolean): THREE.Mesh => {
+    const skyH = isReflected ? 7.8 : 5.2;
+    const skyW = isReflected ? 24.0 : 14.4;
+    const geom = new THREE.PlaneGeometry(skyW, skyH, 56, 32);
+    const pos = geom.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const sx = pos.getX(i);
+      const rawY = pos.getY(i) + skyH * 0.5 + 0.05;
+      // Tilt reflected sky dome gently forward at high `rawY` so steep foreground pond rays always hit sky wash!
+      const sz = isReflected
+        ? -4.15 + sx * sx * 0.02 + Math.max(0, rawY - 2.2) * 0.68
+        : -4.15 + sx * sx * 0.022;
+      pos.setXYZ(i, sx, isReflected ? 2 * WATER_LEVEL_Y - rawY : rawY, sz);
+    }
+    geom.computeVertexNormals();
+    const mat = createWatercolorSkyMaterial(uniforms, isReflected);
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.renderOrder = 0;
+    return mesh;
+  };
+
+  const skyMesh = buildSkyPlane(false);
+  const skyReflMesh = buildSkyPlane(true);
   rootGroup.add(skyMesh);
+  rootGroup.add(skyReflMesh);
 
   // ============================================================================
-  // 1. 6-SHEET LAYERED TORN-PAPER EMBANKMENT ISLAND (`bankMesh`)
+  // 1. ANGULAR-FACETED & TUCKED MOSSY COVE EMBANKMENT (`bankMesh`)
   // ============================================================================
-  const bankGeom = new THREE.PlaneGeometry(9.6, 5.6, 136, 92);
-  bankGeom.rotateX(-Math.PI / 2);
+  const indexedBank = new THREE.PlaneGeometry(10.8, 5.8, 38, 24);
+  indexedBank.rotateX(-Math.PI / 2);
 
-  const posAttr = bankGeom.attributes.position as THREE.BufferAttribute;
-  const varArray = new Float32Array(posAttr.count * 3);
-
-  for (let i = 0; i < posAttr.count; i++) {
-    const x = posAttr.getX(i);
-    const zLocal = posAttr.getZ(i);
-    const z = zLocal - 0.95;
-    posAttr.setZ(i, z);
+  const bPos = indexedBank.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < bPos.count; i++) {
+    const x = bPos.getX(i);
+    const z = bPos.getZ(i) - 1.38;
+    bPos.setZ(i, z);
 
     const shoreZ = evalShorelineZJS(x);
-    const distBehindShore = shoreZ - z;
+    const distBehind = shoreZ - z;
 
-    const bankEllip = Math.hypot(x / 3.26, (z + 0.84) / 1.84);
-    const islandTaper = 1.0 - THREE.MathUtils.smoothstep(bankEllip, 0.46, 0.99);
+    if (distBehind <= -0.05) {
+      bPos.setY(i, WATER_LEVEL_Y - 0.015);
+    } else {
+      const slope = Math.max(0, distBehind);
+      const diagCrease =
+        Math.abs(((x * 0.52 + z * 0.38 + 4.0) % 1.0) - 0.5) * 0.075 +
+        Math.sin(x * 0.9 - z * 1.1) * 0.026;
+      const tuckStep = Math.floor(slope * 1.1) * 0.036;
+      const rawBankY = 0.024 + Math.min(0.62, Math.pow(slope, 0.85) * 0.18 + tuckStep + diagCrease);
 
-    let y = -0.05;
-    if (distBehindShore > -0.22) {
-      const slope = Math.max(0, distBehindShore);
-      const rawHill = Math.min(0.49, Math.pow(slope, 0.82) * 0.29) * islandTaper;
-
-      // Quantize into 6 crisp stacked contour-paper sheets (~0.076 m per sheet)
-      const stepSize = 0.076;
-      const sheetIndex = rawHill / stepSize;
-      const terracedHill =
-        (Math.floor(sheetIndex) + THREE.MathUtils.smoothstep(sheetIndex % 1, 0.14, 0.72)) *
-        stepSize;
-
-      const microPaperWave = Math.sin(x * 1.8 + z * 2.2) * 0.012 * islandTaper;
-
-      const guardianPadWeight =
-        Math.exp(-(x * x) / 2.0) * Math.exp(-Math.pow(z + 0.62, 2) / 1.05);
-      const bankedY = THREE.MathUtils.lerp(
-        terracedHill + microPaperWave,
-        0.068,
-        guardianPadWeight * 0.76
+      const padWeight = Math.exp(-(x * x) / 2.2) * Math.exp(-Math.pow(z + 0.56, 2) / 1.15);
+      const padBlendedY = THREE.MathUtils.lerp(rawBankY, 0.056, padWeight * 0.82);
+      const shoreRamp = THREE.MathUtils.smoothstep(distBehind, -0.03, 0.15);
+      const finalY = Math.max(
+        WATER_LEVEL_Y + 0.002,
+        THREE.MathUtils.lerp(WATER_LEVEL_Y + 0.002, padBlendedY, shoreRamp)
       );
-
-      const shoreRamp = THREE.MathUtils.smoothstep(distBehindShore, -0.22, 0.14);
-      y = THREE.MathUtils.lerp(-0.05, Math.max(0.012, bankedY), shoreRamp);
+      bPos.setY(i, finalY);
     }
-
-    posAttr.setY(i, y);
-    varArray[i * 3 + 0] = (rand() - 0.5) * 0.5;
-    varArray[i * 3 + 1] = rand() * 0.6;
-    varArray[i * 3 + 2] = rand();
   }
 
-  bankGeom.setAttribute('aVariation', new THREE.BufferAttribute(varArray, 3));
+  const bankGeom = indexedBank.toNonIndexed();
+  indexedBank.dispose();
   bankGeom.computeVertexNormals();
+
+  const bCount = bankGeom.attributes.position.count;
+  const bankVars = new Float32Array(bCount * 3);
+  for (let tri = 0; tri < bCount; tri += 3) {
+    const tShift = (rand() - 0.5) * 0.16;
+    const wShift = 0.22 + rand() * 0.32;
+    const pSeed = rand();
+    for (let k = 0; k < 3; k++) {
+      bankVars[(tri + k) * 3 + 0] = tShift;
+      bankVars[(tri + k) * 3 + 1] = wShift;
+      bankVars[(tri + k) * 3 + 2] = pSeed;
+    }
+  }
+  bankGeom.setAttribute('aVariation', new THREE.BufferAttribute(bankVars, 3));
 
   const bankMat = createPaperShingleMaterial(uniforms, { role: 'bank' });
   const bankMesh = new THREE.Mesh(bankGeom, bankMat);
@@ -124,167 +138,211 @@ export function buildWoodlandDiorama(uniforms: PaperSceneUniforms): WoodlandDior
   rootGroup.add(bankMesh);
 
   // ============================================================================
-  // 2. TUCKED SHORELINE FOLDED-PAPER LIMESTONE SLABS & CAIRN
+  // 2. SHORELINE WEATHERED STONES, CENTRAL FLAT SLAB & RIGHT COVE STONES (`Photo 1:1`)
   // ============================================================================
   const stoneSpecs: Array<{
     pos: [number, number, number];
     scale: [number, number, number];
     rotY: number;
   }> = [
-    { pos: [-0.10, 0.055, 0.15], scale: [0.64, 0.09, 0.34], rotY: 0.08 },
-    { pos: [-1.82, 0.05, 0.32], scale: [0.34, 0.085, 0.24], rotY: -0.22 },
-    { pos: [-1.14, 0.04, 0.26], scale: [0.26, 0.075, 0.20], rotY: 0.18 },
-    { pos: [1.56, 0.055, 0.28], scale: [0.32, 0.10, 0.22], rotY: 0.28 },
-    { pos: [1.88, 0.085, 0.35], scale: [0.42, 0.16, 0.30], rotY: -0.26 },
-    { pos: [2.08, 0.12, 0.34], scale: [0.32, 0.22, 0.26], rotY: 0.16 },
+    // Prominent flat pale weathered limestone slab centered right in front of the Guardian's feet!
+    { pos: [-0.04, 0.046, 0.14], scale: [0.54, 0.068, 0.25], rotY: 0.06 },
+    // Small shoreline stones near left & right hands (`media_1793684401016_7f0a395e.jpg`)
+    { pos: [-1.22, 0.038, 0.22], scale: [0.24, 0.062, 0.18], rotY: 0.14 },
+    { pos: [-1.92, 0.044, 0.24], scale: [0.28, 0.072, 0.20], rotY: -0.22 },
+    { pos: [0.88, 0.036, 0.22], scale: [0.20, 0.056, 0.16], rotY: -0.14 },
+    // Two pale angular shoreline stones on the viewer-right bank (`x ≈ 1.72..2.08` in close-up photo!)
+    { pos: [1.72, 0.058, 0.28], scale: [0.29, 0.095, 0.22], rotY: 0.28 },
+    { pos: [2.06, 0.052, 0.32], scale: [0.24, 0.082, 0.19], rotY: -0.34 },
+    // Outer right-cove stone cairn & 2-post trailhead placard (`IMG_0382.DNG` wide cove frame)
+    { pos: [2.48, 0.072, 0.38], scale: [0.32, 0.12, 0.24], rotY: -0.22 },
+    { pos: [2.50, 0.155, 0.37], scale: [0.21, 0.10, 0.18], rotY: 0.20 },
+    { pos: [3.10, 0.42, 0.48], scale: [0.30, 0.19, 0.04], rotY: -0.32 },
   ];
 
-  // DodecahedronGeometry(0.5, 0) is already non-indexed with flat planar face normals
   const stoneGeom = new THREE.DodecahedronGeometry(0.5, 0);
   const stoneMat = createPaperShingleMaterial(uniforms, { role: 'stone' });
+  const stoneReflGeom = stoneGeom.clone();
+  const stoneReflMat = createPaperShingleMaterial(uniforms, { role: 'reflected-stone' });
+
   const stoneInstanced = new THREE.InstancedMesh(stoneGeom, stoneMat, stoneSpecs.length);
+  const stoneReflInstanced = new THREE.InstancedMesh(stoneReflGeom, stoneReflMat, stoneSpecs.length);
   const stoneVars = new Float32Array(stoneSpecs.length * 3);
-  const dummy = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
 
   stoneSpecs.forEach((s, idx) => {
-    q.setFromEuler(new THREE.Euler((rand() - 0.5) * 0.16, s.rotY, (rand() - 0.5) * 0.16));
+    const isPlacard = idx === stoneSpecs.length - 1;
+    q.setFromEuler(
+      new THREE.Euler(
+        isPlacard ? 0.06 : (rand() - 0.5) * 0.15,
+        s.rotY,
+        isPlacard ? 0.0 : (rand() - 0.5) * 0.15
+      )
+    );
     dummy.compose(new THREE.Vector3(...s.pos), q, new THREE.Vector3(...s.scale));
     stoneInstanced.setMatrixAt(idx, dummy);
-    stoneVars[idx * 3 + 0] = 0.45 + rand() * 0.32;
+
+    dummyRefl.copy(dummy).premultiply(reflPlaneMat);
+    stoneReflInstanced.setMatrixAt(idx, dummyRefl);
+
+    stoneVars[idx * 3 + 0] = isPlacard ? 0.28 : (rand() - 0.5) * 0.28;
     stoneVars[idx * 3 + 1] = 0.12;
     stoneVars[idx * 3 + 2] = rand();
   });
+
   stoneGeom.setAttribute('aVariation', new THREE.InstancedBufferAttribute(stoneVars, 3));
+  stoneReflGeom.setAttribute('aVariation', new THREE.InstancedBufferAttribute(stoneVars, 3));
   stoneInstanced.instanceMatrix.needsUpdate = true;
-  stoneInstanced.renderOrder = 3;
+  stoneReflInstanced.instanceMatrix.needsUpdate = true;
+  stoneInstanced.renderOrder = 2;
+  stoneReflInstanced.renderOrder = 1;
   rootGroup.add(stoneInstanced);
+  rootGroup.add(stoneReflInstanced);
 
   // ============================================================================
-  // 3. SMOOTH 6-SIDED FOLDED-PAPER TRUNKS + CLEAN CURVED Y-LIMBS + FALLEN LOGS
+  // 3. 15 SLENDER LATE-AUTUMN WOODLAND TRUNKS (`2.35m – 3.18m`, feathered inside Washi frame!)
   // ============================================================================
   const treeSpecs: Array<{
     x: number;
     z: number;
     baseY: number;
     trunkH: number;
-    limbSpan: number;
     radius: number;
     leanX: number;
     leanZ: number;
+    limbs: number;
   }> = [
-    { x: -2.04, z: -0.86, baseY: 0.04, trunkH: 0.90, limbSpan: 0.58, radius: 0.136, leanX: -0.04, leanZ: 0.02 },
-    { x: -1.52, z: -1.46, baseY: 0.09, trunkH: 1.38, limbSpan: 0.68, radius: 0.148, leanX: -0.04, leanZ: 0.02 },
-    { x: -0.90, z: -1.88, baseY: 0.13, trunkH: 1.72, limbSpan: 0.80, radius: 0.158, leanX: -0.03, leanZ: 0.01 },
-    { x: 0.92, z: -1.86, baseY: 0.13, trunkH: 1.70, limbSpan: 0.80, radius: 0.156, leanX: 0.03, leanZ: 0.01 },
-    { x: 1.54, z: -1.42, baseY: 0.09, trunkH: 1.36, limbSpan: 0.68, radius: 0.146, leanX: 0.04, leanZ: 0.02 },
-    { x: 2.06, z: -0.82, baseY: 0.04, trunkH: 0.88, limbSpan: 0.58, radius: 0.134, leanX: 0.04, leanZ: 0.02 },
+    // Left woodland stems (framed behind fallen mossy logs just like `media_1793684401016_7f0a395e.jpg`)
+    { x: -3.72, z: -0.92, baseY: 0.08, trunkH: 2.38, radius: 0.082, leanX: -0.04, leanZ: 0.02, limbs: 2 },
+    { x: -2.98, z: -1.48, baseY: 0.12, trunkH: 2.75, radius: 0.092, leanX: 0.02, leanZ: 0.01, limbs: 2 },
+    { x: -2.22, z: -1.68, baseY: 0.14, trunkH: 2.98, radius: 0.098, leanX: -0.02, leanZ: 0.01, limbs: 2 },
+    { x: -1.52, z: -1.92, baseY: 0.15, trunkH: 3.08, radius: 0.080, leanX: 0.03, leanZ: 0.02, limbs: 2 },
+
+    // Airy central background stems (parted around `x ≈ -0.30` sky clearing above the Guardian!)
+    { x: -0.86, z: -2.32, baseY: 0.17, trunkH: 3.16, radius: 0.078, leanX: -0.02, leanZ: 0.01, limbs: 2 },
+    { x: 0.28, z: -2.38, baseY: 0.18, trunkH: 3.18, radius: 0.086, leanX: 0.02, leanZ: 0.01, limbs: 2 },
+    { x: 1.06, z: -1.96, baseY: 0.15, trunkH: 3.04, radius: 0.090, leanX: 0.03, leanZ: 0.02, limbs: 2 },
+
+    // Right sunlit clearing grove with forked bare late-autumn branches (`photo right half!`)
+    { x: 1.74, z: -1.62, baseY: 0.12, trunkH: 2.92, radius: 0.096, leanX: -0.01, leanZ: 0.01, limbs: 3 },
+    { x: 2.36, z: -2.08, baseY: 0.15, trunkH: 2.78, radius: 0.080, leanX: 0.04, leanZ: 0.02, limbs: 3 },
+    { x: 2.98, z: -1.42, baseY: 0.11, trunkH: 2.62, radius: 0.086, leanX: 0.05, leanZ: 0.02, limbs: 2 },
+    { x: 3.68, z: -0.84, baseY: 0.08, trunkH: 2.28, radius: 0.078, leanX: 0.07, leanZ: 0.02, limbs: 2 },
+
+    // Delicate deeper background saplings (creating vertical pond reflections through open sky washes!)
+    { x: -2.58, z: -2.78, baseY: 0.20, trunkH: 2.82, radius: 0.058, leanX: 0.01, leanZ: 0.0, limbs: 1 },
+    { x: -1.24, z: -2.92, baseY: 0.20, trunkH: 2.98, radius: 0.056, leanX: -0.01, leanZ: 0.0, limbs: 1 },
+    { x: 0.68, z: -2.88, baseY: 0.20, trunkH: 2.96, radius: 0.056, leanX: -0.01, leanZ: 0.0, limbs: 1 },
+    { x: 2.08, z: -2.85, baseY: 0.20, trunkH: 2.72, radius: 0.058, leanX: 0.02, leanZ: 0.0, limbs: 1 },
   ];
 
-  const fallenLogs = [
-    { pos: [-1.62, 0.22, -0.56], rot: [0.14, 0.36, 1.44], scale: [0.118, 1.04, 0.118], tone: -0.28 },
-    { pos: [-1.46, 0.16, -0.34], rot: [0.08, 0.22, 1.49], scale: [0.102, 0.90, 0.102], tone: -0.20 },
+  // Mossy fallen logs behind Guardian's left flank (`photo left bank`) + 2 trailhead sign posts (`x ≈ 3.10`)
+  const auxWoodSpecs = [
+    { pos: [-2.05, 0.21, -0.66], rot: [0.14, 0.38, 1.44], scale: [0.112, 1.42, 0.112], tone: -0.32 },
+    { pos: [-1.84, 0.14, -0.40], rot: [0.08, 0.24, 1.49], scale: [0.094, 1.16, 0.094], tone: -0.24 },
+    { pos: [2.99, 0.24, 0.51], rot: [0.0, 0.0, 0.01], scale: [0.022, 0.38, 0.022], tone: 0.10 },
+    { pos: [3.21, 0.24, 0.45], rot: [0.0, 0.0, -0.01], scale: [0.022, 0.38, 0.022], tone: 0.10 },
   ];
 
   const trunkGeom = createSculptedPaperTrunkGeometry();
-  const trunkMat = createPaperShingleMaterial(uniforms, { role: 'trunk' });
-  const uprightCount = treeSpecs.length + fallenLogs.length;
-  const trunkInstanced = new THREE.InstancedMesh(trunkGeom, trunkMat, uprightCount);
-  const trunkVars = new Float32Array(uprightCount * 3);
-
   const trunkReflGeom = trunkGeom.clone();
+  const trunkMat = createPaperShingleMaterial(uniforms, { role: 'trunk' });
   const trunkReflMat = createPaperShingleMaterial(uniforms, { role: 'reflected-trunk' });
-  const trunkReflInstanced = new THREE.InstancedMesh(trunkReflGeom, trunkReflMat, treeSpecs.length);
-  const trunkReflVars = new Float32Array(treeSpecs.length * 3);
 
-  // Clean curved 6-sided Y-limbs emerging tangentially out of the top of each trunk
+  const totalTrunks = treeSpecs.length + auxWoodSpecs.length;
+  const trunkInstanced = new THREE.InstancedMesh(trunkGeom, trunkMat, totalTrunks);
+  const trunkReflInstanced = new THREE.InstancedMesh(trunkReflGeom, trunkReflMat, totalTrunks);
+  const trunkVars = new Float32Array(totalTrunks * 3);
+
+  const totalLimbs = treeSpecs.reduce((acc, t) => acc + t.limbs, 0);
   const limbGeom = createFoldedPaperLimbGeometry();
-  const limbCount = treeSpecs.length * 2;
-  const limbInstanced = new THREE.InstancedMesh(limbGeom, trunkMat, limbCount);
-  const limbVars = new Float32Array(limbCount * 3);
+  const limbReflGeom = limbGeom.clone();
+  const limbInstanced = new THREE.InstancedMesh(limbGeom, trunkMat, totalLimbs);
+  const limbReflInstanced = new THREE.InstancedMesh(limbReflGeom, trunkReflMat, totalLimbs);
+  const limbVars = new Float32Array(totalLimbs * 3);
 
   let wCursor = 0;
-  let limbCursor = 0;
+  let lCursor = 0;
+
   treeSpecs.forEach((tr, idx) => {
-    const baseY = tr.baseY;
-    const centerY = baseY + tr.trunkH * 0.5;
-    q.setFromEuler(new THREE.Euler(tr.leanZ, (idx * 1.1) % (Math.PI * 2), tr.leanX));
+    const centerY = tr.baseY + tr.trunkH * 0.5;
+    q.setFromEuler(new THREE.Euler(tr.leanZ, (idx * 1.37) % (Math.PI * 2), tr.leanX));
     dummy.compose(
       new THREE.Vector3(tr.x, centerY, tr.z),
       q,
       new THREE.Vector3(tr.radius, tr.trunkH, tr.radius)
     );
     trunkInstanced.setMatrixAt(wCursor, dummy);
-    const trunkTone = (rand() - 0.5) * 0.35;
-    const trunkWarm = 0.22 + rand() * 0.30;
-    trunkVars[wCursor * 3 + 0] = trunkTone;
-    trunkVars[wCursor * 3 + 1] = trunkWarm;
+    dummyRefl.copy(dummy).premultiply(reflPlaneMat);
+    trunkReflInstanced.setMatrixAt(wCursor, dummyRefl);
+
+    const tTone = (rand() - 0.5) * 0.32;
+    const tWarm = tr.x > 1.2 ? 0.36 + rand() * 0.22 : 0.16 + rand() * 0.20;
+    trunkVars[wCursor * 3 + 0] = tTone;
+    trunkVars[wCursor * 3 + 1] = tWarm;
     trunkVars[wCursor * 3 + 2] = rand();
     wCursor++;
 
-    // Smooth symmetric Y-fork limbs branching outward (`±X`) directly from the trunk crown into the canopy stacks
-    const forkBaseY = baseY + tr.trunkH - 0.14;
-    for (const side of [-1, 1]) {
-      const yaw = side > 0 ? -0.14 : Math.PI + 0.14;
-      q.setFromEuler(new THREE.Euler(0.06, yaw, 0.0));
+    for (let b = 0; b < tr.limbs; b++) {
+      const side = b % 2 === 0 ? -1 : 1;
+      const attachFrac = 0.38 + (b / Math.max(1, tr.limbs)) * 0.44;
+      const attachY = tr.baseY + tr.trunkH * attachFrac;
+      const isSunClearingTree = tr.x > 1.65;
+      const limbLen = isSunClearingTree ? 0.95 + rand() * 0.42 : 0.82 + rand() * 0.28;
+      const yaw = (side > 0 ? -0.15 : Math.PI + 0.15) + (rand() - 0.5) * 0.52;
+      q.setFromEuler(new THREE.Euler(0.10, yaw, side * -0.16));
       dummy.compose(
-        new THREE.Vector3(tr.x, forkBaseY, tr.z + 0.01),
+        new THREE.Vector3(tr.x, attachY, tr.z),
         q,
-        new THREE.Vector3(tr.limbSpan, tr.limbSpan, tr.limbSpan)
+        new THREE.Vector3(limbLen, limbLen * 0.95, limbLen)
       );
-      limbInstanced.setMatrixAt(limbCursor, dummy);
-      limbVars[limbCursor * 3 + 0] = trunkTone;
-      limbVars[limbCursor * 3 + 1] = trunkWarm;
-      limbVars[limbCursor * 3 + 2] = rand();
-      limbCursor++;
-    }
+      limbInstanced.setMatrixAt(lCursor, dummy);
+      dummyRefl.copy(dummy).premultiply(reflPlaneMat);
+      limbReflInstanced.setMatrixAt(lCursor, dummyRefl);
 
-    // Reflected underwater trunk (foreshortened so outer pond crescent stays open for sky reflection)
-    const isBehindGuardian = Math.abs(tr.x) < 1.05;
-    const reflH = isBehindGuardian ? 0.001 : Math.min(0.62, (tr.trunkH + tr.limbSpan) * 0.26);
-    const reflZ = Math.min(0.46, Math.abs(tr.z) * 0.17 + 0.15);
-    dummy.compose(
-      new THREE.Vector3(tr.x * 0.94, -reflH * 0.5 - 0.02, reflZ),
-      q,
-      new THREE.Vector3(tr.radius * 0.86, reflH, tr.radius * 0.86)
-    );
-    trunkReflInstanced.setMatrixAt(idx, dummy);
-    trunkReflVars[idx * 3 + 0] = -0.22;
-    trunkReflVars[idx * 3 + 1] = 0.18;
-    trunkReflVars[idx * 3 + 2] = rand();
+      limbVars[lCursor * 3 + 0] = tTone;
+      limbVars[lCursor * 3 + 1] = tWarm;
+      limbVars[lCursor * 3 + 2] = rand();
+      lCursor++;
+    }
   });
 
-  fallenLogs.forEach((el) => {
-    q.setFromEuler(new THREE.Euler(el.rot[0], el.rot[1], el.rot[2]));
-    dummy.compose(
-      new THREE.Vector3(el.pos[0], el.pos[1], el.pos[2]),
-      q,
-      new THREE.Vector3(el.scale[0], el.scale[1], el.scale[2])
-    );
+  auxWoodSpecs.forEach((aw) => {
+    q.setFromEuler(new THREE.Euler(aw.rot[0], aw.rot[1], aw.rot[2]));
+    dummy.compose(new THREE.Vector3(...aw.pos), q, new THREE.Vector3(...aw.scale));
     trunkInstanced.setMatrixAt(wCursor, dummy);
-    trunkVars[wCursor * 3 + 0] = el.tone;
-    trunkVars[wCursor * 3 + 1] = 0.25;
+    dummyRefl.copy(dummy).premultiply(reflPlaneMat);
+    trunkReflInstanced.setMatrixAt(wCursor, dummyRefl);
+
+    trunkVars[wCursor * 3 + 0] = aw.tone;
+    trunkVars[wCursor * 3 + 1] = 0.22;
     trunkVars[wCursor * 3 + 2] = rand();
     wCursor++;
   });
 
   trunkGeom.setAttribute('aVariation', new THREE.InstancedBufferAttribute(trunkVars, 3));
+  trunkReflGeom.setAttribute('aVariation', new THREE.InstancedBufferAttribute(trunkVars, 3));
   limbGeom.setAttribute('aVariation', new THREE.InstancedBufferAttribute(limbVars, 3));
-  trunkReflGeom.setAttribute('aVariation', new THREE.InstancedBufferAttribute(trunkReflVars, 3));
+  limbReflGeom.setAttribute('aVariation', new THREE.InstancedBufferAttribute(limbVars, 3));
+
   trunkInstanced.instanceMatrix.needsUpdate = true;
-  limbInstanced.instanceMatrix.needsUpdate = true;
   trunkReflInstanced.instanceMatrix.needsUpdate = true;
-  trunkInstanced.renderOrder = 3;
-  limbInstanced.renderOrder = 3;
+  limbInstanced.instanceMatrix.needsUpdate = true;
+  limbReflInstanced.instanceMatrix.needsUpdate = true;
+
+  trunkInstanced.renderOrder = 2;
+  limbInstanced.renderOrder = 2;
   trunkReflInstanced.renderOrder = 1;
+  limbReflInstanced.renderOrder = 1;
+
   rootGroup.add(trunkInstanced);
   rootGroup.add(limbInstanced);
   rootGroup.add(trunkReflInstanced);
+  rootGroup.add(limbReflInstanced);
 
   // ============================================================================
-  // 4. STACKED CUT-PAPER CANOPY & BOUGH SHEETS (MATCHING THE 6-SHEET TERRAIN!)
+  // 4. ASYMMETRIC ORIGAMI DIHEDRAL BOUGH CLUSTERS (`IMG_0382` DENSE COVE + 3 ZONES)
   // ============================================================================
-  const foliagePlacements: Array<{
+  const boughPlacements: Array<{
     pos: THREE.Vector3;
     quat: THREE.Quaternion;
     scale: THREE.Vector3;
@@ -293,194 +351,176 @@ export function buildWoodlandDiorama(uniforms: PaperSceneUniforms): WoodlandDior
     phase: number;
   }> = [];
 
-  // Adds a strictly PARALLEL topographic stack of `layers` deckle-torn Washi sheets:
-  // `qSpin` rotates each sheet in its own local plane BEFORE `qTilt`, so all sheets in a stack
-  // share the exact same normal vector (zero criss-crossing discs—100% parallel like the 6-sheet terrain!).
-  const yAxis = new THREE.Vector3(0, 1, 0);
-  const stackUp = new THREE.Vector3();
-  const addCutPaperStack = (opts: {
+  const addOrigamiBoughCascade = (opts: {
     x: number;
-    y: number;
     z: number;
-    widthX: number;
-    depthZ: number;
-    layers: number;
-    stepDist: number;
-    pitchForward: number;
-    rollZ: number;
-    warmthBase: number;
-    warmthTop: number;
-    yawOffset: number;
+    yStart: number;
+    yEnd: number;
+    tiers: number;
+    baseWidth: number;
+    topWidth: number;
+    warmth: number;
+    pitchBase: number;
+    yawSeed: number;
   }) => {
-    const qTilt = new THREE.Quaternion().setFromEuler(
-      new THREE.Euler(opts.pitchForward, 0, opts.rollZ, 'XYZ')
-    );
-    stackUp.set(0, 1, 0).applyQuaternion(qTilt);
+    for (let k = 0; k < opts.tiers; k++) {
+      const frac = opts.tiers > 1 ? k / (opts.tiers - 1) : 0.5;
+      const y = THREE.MathUtils.lerp(opts.yStart, opts.yEnd, frac);
+      const w = THREE.MathUtils.lerp(opts.baseWidth, opts.topWidth, frac);
+      // Orient bough cluster primarily forward toward the pond (`yaw ∈ [-0.55, +0.55]`) with organic stagger!
+      const yaw = opts.yawSeed + Math.sin(k * 2.3 + opts.x) * 0.42 + (rand() - 0.5) * 0.22;
+      const pitch = opts.pitchBase - frac * 0.12;
+      const roll = (rand() - 0.5) * 0.20;
+      const bQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, roll, 'YXZ'));
 
-    for (let k = 0; k < opts.layers; k++) {
-      const frac = opts.layers > 1 ? k / (opts.layers - 1) : 0.5;
-      const taper = 1.0 - frac * 0.44;
-      const yaw = opts.yawOffset + k * 1.85;
-      const qSpin = new THREE.Quaternion().setFromAxisAngle(yAxis, yaw);
-      const sheetQuat = qTilt.clone().multiply(qSpin);
-
-      const pos = new THREE.Vector3(opts.x, opts.y, opts.z).addScaledVector(
-        stackUp,
-        k * opts.stepDist
-      );
-      foliagePlacements.push({
-        pos,
-        quat: sheetQuat,
-        scale: new THREE.Vector3(opts.widthX * taper, 1.0, opts.depthZ * taper),
-        tone: -0.32 + frac * 0.66,
-        warmth: THREE.MathUtils.lerp(opts.warmthBase, opts.warmthTop, frac),
-        phase: 0.11 + (foliagePlacements.length * 0.173) % 0.87,
+      boughPlacements.push({
+        pos: new THREE.Vector3(
+          opts.x + Math.sin(k * 1.9 + opts.z) * 0.14,
+          y,
+          opts.z + Math.cos(k * 1.6) * 0.12
+        ),
+        quat: bQuat,
+        scale: new THREE.Vector3(w, 0.95 + frac * 0.24, w * 0.95),
+        tone: -0.20 + frac * 0.42,
+        warmth: opts.warmth,
+        phase: rand(),
       });
     }
   };
 
-  // A. Left Flank Parallel Deckle-Torn Crimson-Amber Maple Bough Stacks (`5` sheets per stack)
-  addCutPaperStack({
-    x: -2.02, y: 1.24, z: -0.82,
-    widthX: 1.72, depthZ: 1.38, layers: 5, stepDist: 0.064,
-    pitchForward: 0.20, rollZ: -0.06, warmthBase: 0.90, warmthTop: 0.74, yawOffset: 0.2,
+  // A. Light, Airy Woodland Understory Shrubs (`34` delicate bough sprays total — open sky windows everywhere!)
+  addOrigamiBoughCascade({
+    x: -2.48, z: -1.18, yStart: 0.44, yEnd: 1.32, tiers: 2,
+    baseWidth: 1.06, topWidth: 0.82, warmth: 0.18, pitchBase: 0.22, yawSeed: 0.22,
   });
-  addCutPaperStack({
-    x: -1.66, y: 1.88, z: -1.32,
-    widthX: 1.98, depthZ: 1.46, layers: 5, stepDist: 0.064,
-    pitchForward: 0.24, rollZ: -0.05, warmthBase: 0.85, warmthTop: 0.65, yawOffset: 1.3,
+  addOrigamiBoughCascade({
+    x: -1.36, z: -1.62, yStart: 0.56, yEnd: 1.35, tiers: 2,
+    baseWidth: 1.04, topWidth: 0.78, warmth: 0.10, pitchBase: 0.18, yawSeed: 0.10,
   });
-
-  // B. Right Flank Parallel Deckle-Torn Olive & Ochre Bough Stacks (`5` sheets per stack)
-  addCutPaperStack({
-    x: 2.04, y: 1.22, z: -0.78,
-    widthX: 1.68, depthZ: 1.36, layers: 5, stepDist: 0.064,
-    pitchForward: 0.20, rollZ: 0.06, warmthBase: 0.12, warmthTop: 0.30, yawOffset: 0.7,
+  addOrigamiBoughCascade({
+    x: 0.88, z: -1.58, yStart: 0.52, yEnd: 1.38, tiers: 2,
+    baseWidth: 1.05, topWidth: 0.78, warmth: 0.12, pitchBase: 0.18, yawSeed: -0.08,
   });
-  addCutPaperStack({
-    x: 1.68, y: 1.86, z: -1.28,
-    widthX: 1.94, depthZ: 1.44, layers: 5, stepDist: 0.064,
-    pitchForward: 0.24, rollZ: 0.05, warmthBase: 0.18, warmthTop: 0.42, yawOffset: 2.0,
+  addOrigamiBoughCascade({
+    x: 1.78, z: -1.34, yStart: 0.42, yEnd: 1.15, tiers: 2,
+    baseWidth: 0.98, topWidth: 0.72, warmth: 0.18, pitchBase: 0.20, yawSeed: -0.16,
   });
 
-  // C. Broad Overarching Vaulted Canopy Crown (`3` wide overlapping 5-sheet stacks peaking at `y ≈ 2.82m`)
-  // Broad horizontal span (`widthX = 2.15..2.32`) avoids a uniform "stepping-stone bead arc",
-  // frames the open sky archway behind the Guardian's head (`y = 2.03m`), and leaves `y = 2.82 -> 3.90m` open for the sky!
-  addCutPaperStack({
-    x: -0.98, y: 2.34, z: -1.68,
-    widthX: 2.18, depthZ: 1.48, layers: 5, stepDist: 0.062,
-    pitchForward: 0.28, rollZ: -0.06, warmthBase: 0.72, warmthTop: 0.50, yawOffset: 0.6,
-  });
-  addCutPaperStack({
-    x: 0.02, y: 2.52, z: -1.84,
-    widthX: 2.34, depthZ: 1.50, layers: 5, stepDist: 0.062,
-    pitchForward: 0.30, rollZ: 0.01, warmthBase: 0.48, warmthTop: 0.34, yawOffset: 2.9,
-  });
-  addCutPaperStack({
-    x: 1.00, y: 2.32, z: -1.66,
-    widthX: 2.16, depthZ: 1.48, layers: 5, stepDist: 0.062,
-    pitchForward: 0.28, rollZ: 0.06, warmthBase: 0.30, warmthTop: 0.24, yawOffset: 4.5,
+  // Low shoreline bramble tucked beside left fallen logs (`media_1793684401016_7f0a395e.jpg`)
+  addOrigamiBoughCascade({
+    x: -2.18, z: -0.46, yStart: 0.18, yEnd: 0.44, tiers: 2,
+    baseWidth: 0.84, topWidth: 0.62, warmth: 0.08, pitchBase: 0.24, yawSeed: 0.18,
   });
 
-  // D. Shoreline Mossy-Sage 4-Sheet Torn-Paper Shrub Stacks tucked beside left & right banks
-  addCutPaperStack({
-    x: -1.80, y: 0.15, z: -0.18,
-    widthX: 0.88, depthZ: 0.76, layers: 4, stepDist: 0.048,
-    pitchForward: 0.14, rollZ: -0.04, warmthBase: 0.06, warmthTop: 0.18, yawOffset: 0.9,
+  // B. Broad Region 1 — Airy Upper-Left Autumn Russet-Ochre Boughs (`feathered cleanly inside Washi frame!`)
+  addOrigamiBoughCascade({
+    x: -3.55, z: -0.92, yStart: 1.18, yEnd: 2.38, tiers: 3,
+    baseWidth: 1.16, topWidth: 0.68, warmth: 0.88, pitchBase: 0.22, yawSeed: 0.26,
   });
-  addCutPaperStack({
-    x: 1.84, y: 0.15, z: -0.14,
-    widthX: 0.88, depthZ: 0.76, layers: 4, stepDist: 0.048,
-    pitchForward: 0.14, rollZ: 0.04, warmthBase: 0.06, warmthTop: 0.18, yawOffset: 2.4,
+  addOrigamiBoughCascade({
+    x: -2.68, z: -1.46, yStart: 1.48, yEnd: 2.78, tiers: 3,
+    baseWidth: 1.18, topWidth: 0.66, warmth: 0.92, pitchBase: 0.20, yawSeed: 0.14,
+  });
+  addOrigamiBoughCascade({
+    x: -1.68, z: -1.82, yStart: 1.75, yEnd: 2.95, tiers: 3,
+    baseWidth: 1.08, topWidth: 0.62, warmth: 0.72, pitchBase: 0.18, yawSeed: 0.06,
   });
 
-  // E. Calm Floating Torn-Paper Autumn Leaves on the Pond Surface (`y = 0.015`)
-  const floatingPlacements: Array<{
-    pos: THREE.Vector3;
-    quat: THREE.Quaternion;
-    scale: THREE.Vector3;
-    tone: number;
-    warmth: number;
-    phase: number;
-  }> = [];
-  for (let i = 0; i < 12; i++) {
-    const lx = (rand() - 0.5) * 2.6;
-    const lz = 0.46 + rand() * 1.15;
-    const fq = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rand() * Math.PI * 2, 0));
-    const s = 0.16 + rand() * 0.08;
-    floatingPlacements.push({
-      pos: new THREE.Vector3(lx, 0.015, lz),
-      quat: fq,
-      scale: new THREE.Vector3(s, 0.5, s * 1.18),
-      tone: 0.22 + rand() * 0.34,
-      warmth: 0.65 + rand() * 0.32,
-      phase: rand(),
-    });
-  }
+  // C. Broad Region 2 — Parted Central Olive-Sage Upper Canopy (open luminous sky clearing above Guardian!)
+  addOrigamiBoughCascade({
+    x: -0.92, z: -2.28, yStart: 2.05, yEnd: 3.05, tiers: 3,
+    baseWidth: 1.04, topWidth: 0.54, warmth: 0.10, pitchBase: 0.16, yawSeed: 0.04,
+  });
+  addOrigamiBoughCascade({
+    x: 0.44, z: -2.24, yStart: 1.85, yEnd: 3.08, tiers: 3,
+    baseWidth: 1.08, topWidth: 0.56, warmth: 0.08, pitchBase: 0.17, yawSeed: -0.05,
+  });
+  addOrigamiBoughCascade({
+    x: 1.24, z: -1.88, yStart: 1.72, yEnd: 2.92, tiers: 3,
+    baseWidth: 1.04, topWidth: 0.58, warmth: 0.16, pitchBase: 0.19, yawSeed: -0.12,
+  });
+
+  // D. Broad Region 3 — Right Sunlit Clearing Sprays (`sparse golden-olive clusters around bare winter branches!`)
+  addOrigamiBoughCascade({
+    x: 2.18, z: -1.85, yStart: 1.92, yEnd: 2.82, tiers: 2,
+    baseWidth: 1.02, topWidth: 0.60, warmth: 0.30, pitchBase: 0.18, yawSeed: -0.20,
+  });
+  addOrigamiBoughCascade({
+    x: 2.98, z: -1.42, yStart: 1.62, yEnd: 2.58, tiers: 2,
+    baseWidth: 1.05, topWidth: 0.62, warmth: 0.38, pitchBase: 0.20, yawSeed: -0.26,
+  });
+  addOrigamiBoughCascade({
+    x: 3.62, z: -0.86, yStart: 1.08, yEnd: 2.18, tiers: 2,
+    baseWidth: 1.02, topWidth: 0.60, warmth: 0.42, pitchBase: 0.22, yawSeed: -0.32,
+  });
 
   const folGeom = createFoldedPaperLeafGeometry();
+  const folReflGeom = folGeom.clone();
   const folMat = createPaperShingleMaterial(uniforms, { role: 'foliage' });
   const folReflMat = createPaperShingleMaterial(uniforms, { role: 'reflected-foliage' });
 
-  const totalUprightFol = foliagePlacements.length + floatingPlacements.length;
-  const folMesh = new THREE.InstancedMesh(folGeom, folMat, totalUprightFol);
-  const folReflGeom = folGeom.clone();
-  const folReflMesh = new THREE.InstancedMesh(folReflGeom, folReflMat, foliagePlacements.length);
+  const folMesh = new THREE.InstancedMesh(folGeom, folMat, boughPlacements.length);
+  const folReflMesh = new THREE.InstancedMesh(folReflGeom, folReflMat, boughPlacements.length);
+  const folVars = new Float32Array(boughPlacements.length * 3);
 
-  const folVars = new Float32Array(totalUprightFol * 3);
-  const folReflVars = new Float32Array(foliagePlacements.length * 3);
-
-  foliagePlacements.forEach((fp, i) => {
+  boughPlacements.forEach((fp, i) => {
     dummy.compose(fp.pos, fp.quat, fp.scale);
     folMesh.setMatrixAt(i, dummy);
 
-    // Projectively calibrated inverted canopy arch reflection (`waterHitZ` curves from `~0.9m` on flanks
-    // to `~1.75m` along the central arch, leaving BOTH the inner archway clearing AND the outer foreground
-    // pond crescent `z > 1.90m` open to mirror the celadon watercolor sky!)
-    const reflZ = Math.min(0.56, 0.14 + Math.max(0, fp.pos.y - 0.95) * 0.24);
-    const reflY = -Math.min(0.46, fp.pos.y * 0.165);
-    const isBlockingGuardianChest = Math.abs(fp.pos.x) < 1.05 && fp.pos.y < 2.20;
-    const reflScale = isBlockingGuardianChest || fp.pos.y < 0.25 ? 0.001 : 0.58;
-    dummy.compose(
-      new THREE.Vector3(fp.pos.x * 0.90, reflY, reflZ),
-      fp.quat,
-      new THREE.Vector3(fp.scale.x * reflScale, fp.scale.y * reflScale, fp.scale.z * reflScale)
-    );
-    folReflMesh.setMatrixAt(i, dummy);
+    dummyRefl.copy(dummy).premultiply(reflPlaneMat);
+    folReflMesh.setMatrixAt(i, dummyRefl);
 
     folVars[i * 3 + 0] = fp.tone;
     folVars[i * 3 + 1] = fp.warmth;
     folVars[i * 3 + 2] = fp.phase;
-
-    folReflVars[i * 3 + 0] = fp.tone;
-    folReflVars[i * 3 + 1] = fp.warmth;
-    folReflVars[i * 3 + 2] = fp.phase;
-  });
-
-  floatingPlacements.forEach((fp, j) => {
-    const idx = foliagePlacements.length + j;
-    dummy.compose(fp.pos, fp.quat, fp.scale);
-    folMesh.setMatrixAt(idx, dummy);
-    folVars[idx * 3 + 0] = fp.tone;
-    folVars[idx * 3 + 1] = fp.warmth;
-    folVars[idx * 3 + 2] = fp.phase;
   });
 
   folGeom.setAttribute('aVariation', new THREE.InstancedBufferAttribute(folVars, 3));
-  folReflGeom.setAttribute('aVariation', new THREE.InstancedBufferAttribute(folReflVars, 3));
+  folReflGeom.setAttribute('aVariation', new THREE.InstancedBufferAttribute(folVars, 3));
   folMesh.instanceMatrix.needsUpdate = true;
   folReflMesh.instanceMatrix.needsUpdate = true;
-  folMesh.renderOrder = 3;
+  folMesh.renderOrder = 2;
   folReflMesh.renderOrder = 1;
   rootGroup.add(folMesh);
   rootGroup.add(folReflMesh);
 
+  // E. 16 Miniature 2-Facet V-Folded Origami Floating Autumn Leaves on the Pond (`below fingertip scale`)
+  const floatCount = 16;
+  const floatGeom = createOrigamiFloatingLeafGeometry();
+  const floatMesh = new THREE.InstancedMesh(floatGeom, folMat, floatCount);
+  const floatVars = new Float32Array(floatCount * 3);
+  let placedLeaves = 0;
+
+  while (placedLeaves < floatCount) {
+    const lx = (rand() - 0.5) * 6.2;
+    const shoreAtX = evalShorelineZJS(lx);
+    const lz = shoreAtX + 0.30 + rand() * 3.45;
+    if (Math.hypot(lx / 4.2, (lz - 2.85) / 2.85) > 0.84) continue;
+
+    const fq = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rand() * Math.PI * 2, 0));
+    const s = 0.082 + rand() * 0.042;
+    dummy.compose(
+      new THREE.Vector3(lx, WATER_LEVEL_Y + 0.005, lz),
+      fq,
+      new THREE.Vector3(s, 1.0, s * 1.25)
+    );
+    floatMesh.setMatrixAt(placedLeaves, dummy);
+    floatVars[placedLeaves * 3 + 0] = 0.14 + rand() * 0.24;
+    floatVars[placedLeaves * 3 + 1] = 0.72 + rand() * 0.26;
+    floatVars[placedLeaves * 3 + 2] = rand();
+    placedLeaves++;
+  }
+  floatGeom.setAttribute('aVariation', new THREE.InstancedBufferAttribute(floatVars, 3));
+  floatMesh.instanceMatrix.needsUpdate = true;
+  floatMesh.renderOrder = 5;
+  rootGroup.add(floatMesh);
+
   // ============================================================================
-  // 5. FOREGROUND KUBELKA-MUNK WATERCOLOR POND SURFACE (`y = 0.008`)
+  // 5. FOREGROUND KUBELKA-MUNK WATERCOLOR POND GLAZE (`y = WATER_LEVEL_Y`)
   // ============================================================================
-  const pondGeom = new THREE.PlaneGeometry(8.8, 6.4, 96, 96);
+  const pondGeom = new THREE.PlaneGeometry(11.4, 7.8, 96, 80);
   pondGeom.rotateX(-Math.PI / 2);
-  pondGeom.translate(0, 0.008, 2.15);
+  pondGeom.translate(0, WATER_LEVEL_Y, 2.88);
 
   const pondMat = createWatercolorPondMaterial(uniforms);
   const pondMesh = new THREE.Mesh(pondGeom, pondMat);
@@ -492,6 +532,6 @@ export function buildWoodlandDiorama(uniforms: PaperSceneUniforms): WoodlandDior
     pondMesh,
     bankMesh,
     skyMesh,
-    foliageCount: totalUprightFol,
+    foliageCount: boughPlacements.length + floatCount,
   };
 }

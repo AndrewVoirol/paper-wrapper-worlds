@@ -10,8 +10,6 @@ import {
   clamp,
   smoothstep,
   max,
-  abs,
-  pow,
   exp,
   length,
   positionWorld,
@@ -20,130 +18,157 @@ import {
 } from 'three/tsl';
 import {
   type PaperSceneUniforms,
+  WATER_LEVEL_Y,
   fbmPaper2D,
   evalKubelkaMunk2Flux,
   evaluateShorelineZ,
+  evaluatePondOuterWashMask,
   evaluatePondBasinMask,
+  evaluateDynamicRipples,
   srgbToLinearVec3,
 } from './paperCraftShader';
 
 /**
- * Evaluates a single physical radial capillary-gravity ripple ring at world XZ
- * from a Vec4 impulse `(originX, originZ, birthTime, strength)`.
- */
-function evaluateSingleRipple(xz_in: any, rippleVec_in: any, time_in: any): any {
-  const xz = vec2(xz_in);
-  const rv = rippleVec_in;
-  const age = max(float(time_in).sub(rv.z), float(0.0));
-  const activeGate = smoothstep(float(0.0), float(0.05), age).mul(
-    float(1.0).sub(smoothstep(float(3.2), float(4.8), age))
-  );
-  const dist = length(xz.sub(rv.xy));
-  const waveRadius = age.mul(1.25);
-  const envelope = exp(dist.sub(waveRadius).mul(dist.sub(waveRadius)).mul(-3.6)).mul(
-    exp(age.mul(-0.68))
-  );
-  const phase = dist.sub(waveRadius).mul(16.0);
-  return sin(phase).mul(envelope).mul(rv.w).mul(activeGate);
-}
-
-/**
- * Creates the Subtle Wet-on-Wet Botanical Watercolor Sky Wash Material (`skyBackdropMesh`).
- * Nestled on a concave curved backdrop behind the woodland trunks & vaulted paper canopy:
- * - Upper arch (`y ≈ 2.0 -> 3.55m`): delicate slate-celadon watercolor wash with drifted dry-paper cloud clearings.
- * - Woodland clearing horizon (`y ≈ 0.45 -> 1.95m`): warm golden-ochre mist framing the Guardian's silhouette.
- * - Feathers to exact `0.000` RGB delta (`srgbToLinearVec3`) and `0.0` alpha inside raw Washi margins on all sides.
+ * Creates the Wet-on-Wet Botanical Watercolor Sky Wash Material (`skyMesh` & `skyReflMesh`).
+ * - Upright (`isReflected = false`): Rises behind the `4.15m` woodland (`y ≈ 0.1 -> 4.9m`),
+ *   transitioning from warm sunlit clearing mist (with a low afternoon sun glow on the right
+ *   at `x ≈ +2.25, y ≈ +1.95` matching `IMG_0382.DNG`) to cool slate-celadon upper sky.
+ * - Reflected (`isReflected = true`): Exact planar mirror (`y < WATER_LEVEL_Y`) clipped cleanly
+ *   to `evaluatePondOuterWashMask(waterHitXZ)` so inter-crown sky gaps and the right-side pond
+ *   sky window shine wet celadon & warm sun-mist washes across the full foreground pond!
  */
 export function createWatercolorSkyMaterial(
-  uniforms: PaperSceneUniforms
+  uniforms: PaperSceneUniforms,
+  isReflected = false
 ): THREE.MeshBasicNodeMaterial {
   const mat = new THREE.MeshBasicNodeMaterial();
   mat.transparent = true;
   mat.depthWrite = false;
   mat.side = THREE.DoubleSide;
 
-  const evaluateSkyEnvelope = Fn(([wp_in]: [any]) => {
+  const evaluateSkyWash = Fn(([wp_in]: [any]) => {
     const wp = vec3(wp_in);
     const t = uniforms.uTime;
+    const skyY = isReflected ? float(2.0 * WATER_LEVEL_Y).sub(wp.y) : wp.y;
 
-    const bleedBroad = fbmPaper2D(vec2(wp.x.mul(0.72), wp.y.mul(0.84).add(1.7))).sub(0.5).mul(0.46);
-    const bleedFine = fbmPaper2D(vec2(wp.x.mul(2.6).add(4.1), wp.y.mul(2.5))).sub(0.5).mul(0.14);
+    const bleedBroad = fbmPaper2D(vec2(wp.x.mul(0.50), skyY.mul(0.54).add(1.7))).sub(0.5).mul(0.40);
+    const bleedFine = fbmPaper2D(vec2(wp.x.mul(1.85).add(4.1), skyY.mul(1.8))).sub(0.5).mul(0.12);
     const bleed = bleedBroad.add(bleedFine).mul(uniforms.uWatercolorBleed.mul(0.55).add(0.45));
 
-    // Broad, calm wet-on-wet oval/dome wash on the flat background sheet (no cylinder wrap!)
-    // Rises cleanly ABOVE the stacked canopy arch (`canopy top ≈ 2.86m` vs `sky wash top ≈ 3.88m`)
-    // while still feathering seamlessly to 0.000 inside the raw Washi paper margin (`y_top ≈ 4.30m`)!
-    const widthScale = mix(float(3.05), float(3.38), uniforms.uRevealMode);
-    const nx = wp.x.div(widthScale);
-    const ny = wp.y.sub(2.15).div(1.78);
-    const domeDist = length(vec2(nx, ny)).add(bleed.mul(0.32));
+    const camPos = cameraPosition;
+    const rayDenom = max(camPos.y.sub(wp.y), float(0.001));
+    const tWater = clamp(camPos.y.sub(WATER_LEVEL_Y).div(rayDenom), float(0.0), float(1.0));
+    const waterHitXZ = mix(vec2(camPos.x, camPos.z), vec2(wp.x, wp.z), tWater);
 
-    const domeWash = float(1.0).sub(smoothstep(float(0.58), float(1.02), domeDist));
-    const bottomHorizonFade = smoothstep(float(0.28), float(1.05), wp.y.add(bleed.mul(0.25)));
+    const widthScale = mix(float(4.35), float(4.85), uniforms.uRevealMode);
+    const sampleX = isReflected ? waterHitXZ.x : wp.x;
+    const nx = sampleX.div(widthScale);
+    const domeCenterY = float(isReflected ? 2.45 : 1.68);
+    const domeHalfY = float(isReflected ? 3.45 : 1.62);
+    const ny = skyY.sub(domeCenterY).div(domeHalfY);
+    const domeDist = length(vec2(nx, ny)).add(bleed.mul(0.28));
 
-    // Gentle drifted dry-paper cloud clearings inside the upper sky band
-    const cloudField = fbmPaper2D(vec2(wp.x.mul(0.62).sub(t.mul(0.010)), wp.y.mul(1.18).add(2.3)));
-    const cloudSoftness = float(1.0).sub(smoothstep(float(0.60), float(0.90), cloudField).mul(0.34));
+    const domeWash = isReflected
+      ? float(1.0)
+      : float(1.0).sub(smoothstep(float(0.46), float(1.00), domeDist));
+    // Upright sky fades near ground; reflected sky stays solid down to `skyY = 0` so near-shore water reflects mossy bank earth (zero white gap!)
+    const horizonFade = isReflected
+      ? float(1.0)
+      : smoothstep(float(0.05), float(0.55), skyY.add(bleed.mul(0.22)));
 
-    return clamp(domeWash.mul(bottomHorizonFade).mul(cloudSoftness), float(0.0), float(1.0));
+    const cloudField = fbmPaper2D(vec2(wp.x.mul(0.46).sub(t.mul(0.008)), skyY.mul(0.82).add(2.3)));
+    const cloudSoftness = float(1.0).sub(smoothstep(float(0.56), float(0.90), cloudField).mul(0.38));
+
+    let env: any = clamp(domeWash.mul(horizonFade).mul(cloudSoftness), float(0.0), float(1.0));
+
+    if (isReflected) {
+      const shoreZAtHit = evaluateShorelineZ(waterHitXZ.x);
+      const inPondBasin = smoothstep(shoreZAtHit.sub(0.14), shoreZAtHit.add(0.01), waterHitXZ.y);
+      const outerMask = evaluatePondOuterWashMask(waterHitXZ, uniforms);
+      const belowWater = smoothstep(float(WATER_LEVEL_Y + 0.008), float(WATER_LEVEL_Y - 0.015), wp.y);
+      env = env.mul(inPondBasin).mul(smoothstep(float(0.02), float(0.56), outerMask)).mul(belowWater);
+    }
+
+    return env;
   });
 
   mat.colorNode = Fn(() => {
     const wp = positionWorld;
     const t = uniforms.uTime;
-    const skyEnv = evaluateSkyEnvelope(wp);
+    const skyY = isReflected ? float(2.0 * WATER_LEVEL_Y).sub(wp.y) : wp.y;
+    const skyEnv = evaluateSkyWash(wp);
 
-    const paperTooth = fbmPaper2D(vec2(wp.x.mul(5.6), wp.y.mul(5.6).add(wp.z.mul(2.2))));
-    const mistFlow = fbmPaper2D(vec2(wp.x.mul(1.15).add(t.mul(0.01)), wp.y.mul(1.45)));
+    const paperTooth = fbmPaper2D(vec2(wp.x.mul(5.2), skyY.mul(5.2)));
+    const mistFlow = fbmPaper2D(vec2(wp.x.mul(0.85).add(t.mul(0.008)), skyY.mul(1.05)));
 
-    // Warm sunlit clearing glow low between trunks -> cool atmospheric celadon-slate zenith above canopy
-    const horizonToZenith = smoothstep(float(0.75), float(2.45), wp.y.add(mistFlow.sub(0.5).mul(0.42)));
-    const skyPigment = mix(
+    // Horizon-to-zenith gradient + open warm clearing glow behind airy woodland trunks
+    const horizonToZenith = smoothstep(float(0.75), float(3.45), skyY.add(mistFlow.sub(0.5).mul(0.42)));
+    const baseSkyPigment = mix(
       vec3(uniforms.uSkyHorizon),
       vec3(uniforms.uSkyZenith),
       horizonToZenith
     );
 
-    // Delicate wet-on-wet Fuchidori whisper near the upper watercolor wash boundary
-    const upperRimPinning = smoothstep(float(0.08), float(0.26), skyEnv)
-      .mul(float(1.0).sub(smoothstep(float(0.26), float(0.52), skyEnv)))
-      .mul(uniforms.uWatercolorBleed)
-      .mul(0.08);
+    const sunDist = length(vec2(wp.x.sub(1.65).mul(0.52), skyY.sub(1.85).mul(0.78)));
+    const rightSunClearing = exp(sunDist.mul(sunDist).mul(-1.15));
+    const sunlitGold = vec3(0.96, 0.90, 0.75);
+    const upperSkyPigment = mix(baseSkyPigment, sunlitGold, rightSunClearing.mul(0.72));
+    // Near-horizon reflected bank wash (`skyY < 0.62` in reflection): warm mossy-amber bank mirror so zero pale strip appears at `shoreZ`!
+    const lowBankMirrorMix = isReflected
+      ? float(1.0).sub(smoothstep(float(0.04), float(0.62), skyY.add(mistFlow.sub(0.5).mul(0.18))))
+      : float(0.0);
+    const bankMirrorPigment = mix(
+      vec3(uniforms.uPondAmberTannin),
+      vec3(uniforms.uPondDeepMoss).mul(1.18),
+      float(0.48)
+    );
+    const skyPigment = mix(upperSkyPigment, bankMirrorPigment, lowBankMirrorMix.mul(0.88));
 
-    // Thin Kubelka-Munk watercolor glaze (`d ≈ 0.0 .. 0.34`) so warm #f2ebd9 Washi fibers glow right through
-    const dSky = float(0.30)
-      .add(mistFlow.sub(0.5).mul(0.12))
-      .add(paperTooth.sub(0.5).mul(0.11).mul(uniforms.uPaperTooth))
-      .add(upperRimPinning)
+    // Translucent wet-on-wet Kubelka-Munk sky wash (`#f2ebd9` paper glows gently through!)
+    const dSky = float(isReflected ? 0.42 : 0.34)
+      .add(lowBankMirrorMix.mul(0.24))
+      .sub(rightSunClearing.mul(isReflected ? 0.16 : 0.15))
+      .add(mistFlow.sub(0.5).mul(0.13))
+      .add(paperTooth.sub(0.5).mul(0.09).mul(uniforms.uPaperTooth))
       .mul(smoothstep(float(0.0), float(0.68), skyEnv));
 
     const skyWashSrgb = evalKubelkaMunk2Flux(
       uniforms.uPaperBacking,
       skyPigment,
       vec3(1.12, 1.14, 1.18),
-      dSky
+      max(float(0.0), dSky)
+    );
+
+    const liftedSky = clamp(
+      skyWashSrgb.add(vec3(0.04, 0.03, 0.01).mul(rightSunClearing).mul(skyEnv)),
+      vec3(0.0),
+      vec3(1.0)
     );
 
     const finalSrgb = mix(
       vec3(uniforms.uPaperBacking),
-      skyWashSrgb,
-      smoothstep(float(0.01), float(0.22), skyEnv)
+      liftedSky,
+      smoothstep(float(0.01), float(0.32), skyEnv)
     );
     return srgbToLinearVec3(finalSrgb);
   })();
 
   mat.opacityNode = Fn(() => {
     const wp = positionWorld;
-    const skyEnv = evaluateSkyEnvelope(wp);
-    return smoothstep(float(0.01), float(0.32), skyEnv).mul(0.92);
+    const skyEnv = evaluateSkyWash(wp);
+    return smoothstep(float(0.01), float(0.38), skyEnv).mul(isReflected ? 0.92 : 0.86);
   })();
 
   return mat;
 }
 
 /**
- * Creates the Tightly Bound Kubelka-Munk Watercolor Pond Surface Material (`pondMesh`).
- * Reflects the subtle watercolor sky wash in canopy openings while feathering seamlessly into Washi paper.
+ * Creates the Kubelka-Munk Watercolor Pond Surface Glaze Material (`pondMesh`, `renderOrder = 4`).
+ * Composites a wet-on-wet olive-moss & leaf-litter tannin watercolor glaze OVER the 3D planar-reflected
+ * woodland, crouching guardian & celadon sky wash:
+ * - Zero shoreline white gap: dark evaporative *Fuchidori* contact pinning starts right at `shoreZ`.
+ * - Lateral optical balance matching `IMG_0382.DNG`: rich shadowed olive-tannin pond mirror across the
+ *   left/center canopy & guardian, opening into a luminous Fresnel celadon-mist sky window on the right.
  */
 export function createWatercolorPondMaterial(
   uniforms: PaperSceneUniforms
@@ -156,157 +181,94 @@ export function createWatercolorPondMaterial(
     const wp = positionWorld;
     const xz = vec2(wp.x, wp.z);
     const t = uniforms.uTime;
-
     const pondBasinMask = evaluatePondBasinMask(xz, uniforms);
+    const outerWashMask = evaluatePondOuterWashMask(xz, uniforms);
 
-    // 1. Ambient wind capillary waves + 4 interactive droplet ripples
-    const ambientWave1 = sin(xz.y.mul(8.5).sub(t.mul(1.8)).add(sin(xz.x.mul(3.2)).mul(0.8)));
-    const ambientWave2 = cos(xz.x.mul(6.2).add(xz.y.mul(5.4)).add(t.mul(1.3)));
-    const r0 = float(evaluateSingleRipple(xz, uniforms.uRipple0, t));
-    const r1 = float(evaluateSingleRipple(xz, uniforms.uRipple1, t));
-    const r2 = float(evaluateSingleRipple(xz, uniforms.uRipple2, t));
-    const r3 = float(evaluateSingleRipple(xz, uniforms.uRipple3, t));
-    const dynamicRipples = r0.add(r1).add(r2).add(r3);
+    const ambientWave1 = sin(xz.y.mul(9.2).sub(t.mul(1.85)).add(sin(xz.x.mul(3.1)).mul(0.75)));
+    const ambientWave2 = cos(xz.x.mul(5.8).add(xz.y.mul(5.1)).add(t.mul(1.25)));
+    const dynamicRipples = evaluateDynamicRipples(xz, uniforms);
 
-    const totalRipple = float(
-      ambientWave1
-        .mul(0.35)
-        .add(ambientWave2.mul(0.25))
-        .add(dynamicRipples.mul(1.8))
-        .mul(uniforms.uPondRippleStrength)
-    );
+    const totalRipple = ambientWave1
+      .mul(0.30)
+      .add(ambientWave2.mul(0.22))
+      .add(dynamicRipples.mul(1.85))
+      .mul(uniforms.uPondRippleStrength);
 
     const warpedXZ = xz.add(
-      vec2(totalRipple.mul(0.13), float(ambientWave2.mul(0.075).mul(uniforms.uPondRippleStrength)))
+      vec2(totalRipple.mul(0.11), ambientWave2.mul(0.06).mul(uniforms.uPondRippleStrength))
     );
 
-    // 2. Paper substrate tooth & multi-layer watercolor wash granulation
-    const paperTooth = fbmPaper2D(xz.mul(5.4));
-    const washFlow = fbmPaper2D(warpedXZ.mul(1.55).add(vec2(t.mul(0.025), float(0.0))));
-    const washDetail = fbmPaper2D(warpedXZ.mul(3.9).sub(vec2(float(0.0), t.mul(0.035))));
+    const paperTooth = fbmPaper2D(xz.mul(5.2));
+    const washFlow = fbmPaper2D(warpedXZ.mul(1.05).add(vec2(t.mul(0.016), float(0.0))));
+    const backrunBloom = fbmPaper2D(warpedXZ.mul(0.58).add(vec2(float(-2.7), washFlow.mul(0.45))));
 
-    // 3. Mirrored Sky Zones on the Pond Surface:
-    //    (a) Central Archway Opening (`archSkyWindow`: behind the reflected Guardian's crown)
-    //    (b) Open Sky ABOVE the Stacked Canopy Arch (`aboveCanopySkyBand`: foreground pond crescent `z > reflectedCanopyOuterZ`)
-    //    (c) Subtle sky gaps between reflected trunks
-    const archSkyWindow = float(1.0)
-      .sub(smoothstep(float(0.48), float(0.96), abs(warpedXZ.x)))
-      .mul(smoothstep(float(0.96), float(1.26), warpedXZ.y))
-      .mul(float(1.0).sub(smoothstep(float(1.48), float(1.74), warpedXZ.y)));
-
-    // Inverted arch contour on the water plane (`z ≈ 1.94` at center, curving back to `~1.38` on flanks)
-    const reflectedCanopyOuterZ = float(1.94)
-      .sub(warpedXZ.x.mul(warpedXZ.x).mul(0.13))
-      .add(washFlow.sub(0.5).mul(0.18));
-    const aboveCanopySkyBand = smoothstep(
-      reflectedCanopyOuterZ.sub(0.12),
-      reflectedCanopyOuterZ.add(0.20),
-      warpedXZ.y
-    );
-
-    const trunkFreq = sin(warpedXZ.x.mul(4.4).add(washFlow.mul(1.4)))
-      .mul(0.5)
-      .add(0.5);
-    const branchCanopy = fbmPaper2D(vec2(warpedXZ.x.mul(2.8), warpedXZ.y.mul(1.6)));
-    const interTrunkGaps = smoothstep(float(0.58), float(0.86), trunkFreq.mul(0.55).add(branchCanopy.mul(0.5)))
-      .mul(smoothstep(float(0.75), float(1.95), abs(warpedXZ.x)))
-      .mul(float(1.0).sub(aboveCanopySkyBand));
-
-    const skyReflectionMask = clamp(
-      max(max(archSkyWindow.mul(0.95), aboveCanopySkyBand), interTrunkGaps.mul(0.38)),
-      float(0.0),
-      float(1.0)
-    );
-
-    // 4. Shoreline, submerged-hand & delicate outer wash pinning
     const shoreZ = evaluateShorelineZ(xz.x);
     const distFromShore = max(xz.y.sub(shoreZ), float(0.0));
-    const shoreMeniscusRing = exp(distFromShore.mul(-5.8)).mul(
-      smoothstep(float(0.02), float(0.16), distFromShore)
+    // Continuous *Fuchidori* contact pinning right from `distFromShore = 0` so zero pale gap ever forms at `shoreZ`!
+    const shoreMeniscusRing = exp(distFromShore.mul(-9.0));
+
+    const dLeftHand = length(xz.sub(vec2(-1.50, 0.46)));
+    const dRightHand = length(xz.sub(vec2(1.26, 0.48)));
+    const handWaterRing = exp(dLeftHand.sub(0.42).mul(dLeftHand.sub(0.42)).mul(-16.0)).add(
+      exp(dRightHand.sub(0.42).mul(dRightHand.sub(0.42)).mul(-16.0))
     );
 
-    const dLeftHand = length(xz.sub(vec2(-1.38, 0.38)));
-    const dRightHand = length(xz.sub(vec2(1.22, 0.38)));
-    const handWaterRing = exp(dLeftHand.sub(0.46).mul(dLeftHand.sub(0.46)).mul(-18.0)).add(
-      exp(dRightHand.sub(0.46).mul(dRightHand.sub(0.46)).mul(-18.0))
-    );
-
-    const goldenSunWindow = smoothstep(float(0.85), float(2.35), warpedXZ.x).mul(
-      smoothstep(float(0.35), float(1.65), warpedXZ.y)
-    );
-    const crimsonMapleReflection = smoothstep(float(-0.45), float(-2.35), warpedXZ.x).mul(
-      float(1.0).sub(aboveCanopySkyBand)
-    );
-
-    const outerWashRing = smoothstep(float(0.12), float(0.30), pondBasinMask).mul(
-      float(1.0).sub(smoothstep(float(0.30), float(0.56), pondBasinMask))
+    // Evaporative watercolor tide-line along the soft outer puddle margin onto `#f2ebd9` Washi!
+    const outerWashRing = smoothstep(float(0.06), float(0.24), outerWashMask).mul(
+      float(1.0).sub(smoothstep(float(0.24), float(0.52), outerWashMask))
     );
 
     const totalPinning = shoreMeniscusRing
-      .mul(0.55)
-      .add(handWaterRing.mul(0.62))
-      .add(outerWashRing.mul(0.12))
+      .mul(0.76)
+      .add(handWaterRing.mul(0.66))
+      .add(outerWashRing.mul(0.38))
       .mul(uniforms.uWatercolorBleed);
 
-    // 5. Physical Kubelka-Munk 2-Flux Glaze Evaluation
-    const washThicknessEnvelope = smoothstep(float(0.0), float(0.50), pondBasinMask);
-
-    // Reflected watercolor sky glaze (`uSkyHorizon` in inner arch clearing -> `uSkyZenith` above canopy)
-    const skyCloudSoft = fbmPaper2D(vec2(warpedXZ.x.mul(0.65).sub(t.mul(0.01)), warpedXZ.y.mul(1.15).add(3.1)));
-    const skyCloudClear = float(1.0).sub(smoothstep(float(0.62), float(0.90), skyCloudSoft).mul(0.28));
-    const skyZenithMix = smoothstep(float(1.18), float(1.92), warpedXZ.y);
-    const reflectedSkyPigment = mix(
-      vec3(uniforms.uSkyHorizon),
-      vec3(uniforms.uSkyZenith),
-      skyZenithMix.mul(0.92).add(0.08)
+    const nearBankWeight = float(1.0).sub(smoothstep(float(0.45), float(3.85), distFromShore));
+    // Central Guardian Reflection Window (`|x| < 1.58`, `distFromShore < 2.65`): keeps glaze delicate & warm-amber
+    // so his pale vertical-shingle reflection shines clearly just like the close-up photo!
+    const guardianWindowX = float(1.0).sub(smoothstep(float(0.95), float(1.85), xz.x.abs()));
+    const guardianWindowZ = smoothstep(float(0.08), float(0.28), distFromShore).mul(
+      float(1.0).sub(smoothstep(float(2.05), float(3.05), distFromShore))
     );
-    const dSkyRefl = float(0.38)
-      .add(washFlow.sub(0.5).mul(0.10))
-      .add(paperTooth.sub(0.5).mul(0.09).mul(uniforms.uPaperTooth))
-      .add(outerWashRing.mul(0.09).mul(uniforms.uWatercolorBleed))
-      .mul(skyCloudClear)
-      .mul(washThicknessEnvelope);
+    const guardianMirrorWindow = guardianWindowX.mul(guardianWindowZ);
 
-    const reflectedSkyBase = evalKubelkaMunk2Flux(
-      uniforms.uPaperBacking,
-      reflectedSkyPigment,
-      vec3(1.12, 1.14, 1.18),
-      dSkyRefl
+    const rightSkyWindow = smoothstep(float(0.55), float(2.45), xz.x.add(washFlow.sub(0.5).mul(0.65))).mul(
+      smoothstep(float(0.35), float(1.65), distFromShore)
     );
+    const washEnvelope = smoothstep(float(0.0), float(0.52), outerWashMask);
 
-    // Botanical tannin & moss glazes drop all the way to 0.00 in open sky reflection zones
-    // (critical in Kubelka-Munk because dark moss R_inf.b = 0.12 has K/S = 3.23 and turns blue sky green even at 10%!)
-    const canopyShadowWeight = pow(clamp(float(1.0).sub(skyReflectionMask), float(0.0), float(1.0)), float(1.65));
-
-    const dTannin = float(0.56)
-      .add(washFlow.mul(0.68))
-      .add(paperTooth.sub(0.5).mul(0.32).mul(uniforms.uPaperTooth))
-      .add(totalPinning.mul(0.52))
-      .mul(canopyShadowWeight)
-      .mul(washThicknessEnvelope);
+    const dTannin = float(0.36)
+      .add(nearBankWeight.mul(0.32))
+      .sub(rightSkyWindow.mul(0.18))
+      .sub(guardianMirrorWindow.mul(0.12))
+      .add(washFlow.mul(0.28))
+      .add(paperTooth.sub(0.5).mul(0.20).mul(uniforms.uPaperTooth))
+      .add(totalPinning.mul(0.58))
+      .mul(washEnvelope);
 
     const layer1Tannin = evalKubelkaMunk2Flux(
-      reflectedSkyBase,
+      uniforms.uPaperBacking,
       uniforms.uPondAmberTannin,
-      vec3(1.18, 1.12, 1.02),
-      dTannin
+      vec3(1.16, 1.12, 1.02),
+      max(float(0.0), dTannin)
     );
 
-    const dMoss = float(0.38)
-      .add(washDetail.mul(0.76))
-      .add(totalPinning.mul(0.68))
-      .add(totalRipple.abs().mul(0.22))
-      .mul(canopyShadowWeight)
-      .mul(washThicknessEnvelope);
+    const dMoss = float(0.26)
+      .add(nearBankWeight.mul(0.28))
+      .sub(rightSkyWindow.mul(0.18))
+      .sub(guardianMirrorWindow.mul(0.15))
+      .add(backrunBloom.sub(0.35).mul(0.30))
+      .add(totalPinning.mul(0.66))
+      .mul(washEnvelope);
 
     const layer2Moss = evalKubelkaMunk2Flux(
       layer1Tannin,
       uniforms.uPondDeepMoss,
       vec3(1.06, 1.14, 0.98),
-      dMoss
+      max(float(0.0), dMoss)
     );
 
-    // 6. Physical Fresnel grazing sky/paper sheen + ripple crest delicacy
     const viewDir = normalize(cameraPosition.sub(wp));
     const cosTheta = clamp(viewDir.y, float(0.05), float(1.0));
     const fresnel = float(0.04).add(
@@ -315,28 +277,37 @@ export function createWatercolorPondMaterial(
       )
     );
 
-    const rippleHighlight = smoothstep(float(0.18), float(0.62), dynamicRipples.abs())
-      .mul(0.24)
-      .add(fresnel.mul(0.20).add(skyReflectionMask.mul(0.32)).add(goldenSunWindow.mul(0.22).mul(canopyShadowWeight)))
-      .mul(washThicknessEnvelope);
+    const skySheenColor = evalKubelkaMunk2Flux(
+      uniforms.uPaperBacking,
+      mix(vec3(uniforms.uSkyZenith), vec3(uniforms.uSkyHorizon), rightSkyWindow.mul(0.58).add(0.22)),
+      vec3(1.12, 1.14, 1.18),
+      float(0.24)
+    );
 
-    const mapleTintedWater = mix(
+    // Wet-in-wet watercolor mist/paper bloom on outer flanks (restoring `2e1da22`'s hand-painted watercolor feel!)
+    const outerMistBloom = smoothstep(float(0.52), float(0.86), backrunBloom)
+      .mul(float(1.0).sub(guardianMirrorWindow.mul(0.85)))
+      .mul(0.28);
+
+    const rippleCrestLift = smoothstep(float(0.12), float(0.56), dynamicRipples.abs())
+      .mul(0.38)
+      .add(fresnel.mul(mix(float(0.26), float(0.54), rightSkyWindow)))
+      .add(outerMistBloom)
+      .mul(washEnvelope);
+
+    const surfaceGlaze = mix(
       layer2Moss,
-      vec3(0.52, 0.27, 0.19),
-      crimsonMapleReflection.mul(0.34).mul(canopyShadowWeight).mul(washThicknessEnvelope)
+      skySheenColor,
+      clamp(rippleCrestLift, float(0.0), float(0.78))
     );
 
-    const glazedWater = mix(
-      mapleTintedWater,
-      reflectedSkyBase,
-      clamp(rippleHighlight, float(0.0), float(0.80))
-    );
-
+    // Soft feathered watercolor puddle edge onto `#f2ebd9` Washi (`0.01 -> 0.44`)
     const finalSrgb = mix(
       vec3(uniforms.uPaperBacking),
-      glazedWater,
-      smoothstep(float(0.01), float(0.22), pondBasinMask)
+      surfaceGlaze,
+      smoothstep(float(0.01), float(0.44), outerWashMask)
     );
+    void pondBasinMask;
     return srgbToLinearVec3(finalSrgb);
   })();
 
@@ -344,15 +315,46 @@ export function createWatercolorPondMaterial(
     const wp = positionWorld;
     const xz = vec2(wp.x, wp.z);
     const pondBasinMask = evaluatePondBasinMask(xz, uniforms);
+    const outerWashMask = evaluatePondOuterWashMask(xz, uniforms);
+    const shoreZ = evaluateShorelineZ(xz.x);
+    const distFromShore = max(xz.y.sub(shoreZ), float(0.0));
 
-    const guardianWindowX = float(1.0).sub(smoothstep(float(0.88), float(1.95), abs(xz.x)));
-    const guardianWindowZ = smoothstep(float(0.18), float(0.58), xz.y).mul(
-      float(1.0).sub(smoothstep(float(1.52), float(1.88), xz.y))
+    const shoreMeniscusRing = exp(distFromShore.mul(-9.0));
+    const dLeftHand = length(xz.sub(vec2(-1.50, 0.46)));
+    const dRightHand = length(xz.sub(vec2(1.26, 0.48)));
+    const handWaterRing = exp(dLeftHand.sub(0.42).mul(dLeftHand.sub(0.42)).mul(-16.0)).add(
+      exp(dRightHand.sub(0.42).mul(dRightHand.sub(0.42)).mul(-16.0))
     );
-    const reflectionTranslucency = guardianWindowX.mul(guardianWindowZ);
+    const outerWashRing = smoothstep(float(0.06), float(0.24), outerWashMask).mul(
+      float(1.0).sub(smoothstep(float(0.24), float(0.52), outerWashMask))
+    );
+    const pinning = shoreMeniscusRing
+      .mul(0.76)
+      .add(handWaterRing.mul(0.66))
+      .add(outerWashRing.mul(0.34))
+      .mul(uniforms.uWatercolorBleed);
 
-    const baseOpacity = mix(float(0.90), float(0.46), reflectionTranslucency);
-    return baseOpacity.mul(smoothstep(float(0.0), float(0.42), pondBasinMask));
+    const guardianWindowX = float(1.0).sub(smoothstep(float(0.95), float(1.85), xz.x.abs()));
+    const guardianWindowZ = smoothstep(float(0.08), float(0.28), distFromShore).mul(
+      float(1.0).sub(smoothstep(float(2.05), float(3.05), distFromShore))
+    );
+    const guardianMirrorWindow = guardianWindowX.mul(guardianWindowZ);
+
+    const nearBankWeight = float(1.0).sub(smoothstep(float(0.45), float(3.85), distFromShore));
+    const rightSkyWindow = smoothstep(float(0.65), float(2.45), xz.x).mul(
+      smoothstep(float(0.35), float(1.65), distFromShore)
+    );
+
+    // Keep central Guardian mirror window delicately glazed (`0.16..0.24`) while keeping `shoreZ` richly pinned!
+    const baseOpacity = mix(float(0.32), float(0.50), nearBankWeight)
+      .sub(guardianMirrorWindow.mul(0.22))
+      .sub(rightSkyWindow.mul(0.10))
+      .add(pinning.mul(0.42));
+
+    const shoreContactGate = smoothstep(float(-0.045), float(0.008), xz.y.sub(shoreZ));
+    const outerPuddleFeather = smoothstep(float(0.0), float(0.48), outerWashMask);
+    void pondBasinMask;
+    return clamp(baseOpacity, float(0.12), float(0.86)).mul(shoreContactGate).mul(outerPuddleFeather);
   })();
 
   return mat;

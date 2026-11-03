@@ -27,45 +27,45 @@ export interface SimulationParams {
   presetId: CameraPreset['id'];
   paletteId: PaperPalettePreset['id'];
   revealMode: 'interactive-wash' | 'full-diorama';
-  paperTooth: number;        // 0.0 to 1.0 (cold-press texture depth & fiber grain)
+  paperTooth: number;        // 0.0 to 1.0 (Washi bast fiber & cold-press valley granulation)
   watercolorBleed: number;   // 0.0 to 1.0 (Fuchidori edge pinning & wash feathering)
-  pondRippleStrength: number;// 0.0 to 1.0 (reflection distortion & capillary wave amplitude)
-  shingleRoughness: number;  // 0.0 to 1.0 (deckle crease shadow & wood-grain contrast)
-  windBreeze: number;        // 0.0 to 1.0 (gentle sway of forest branches & guardian breathing)
+  pondRippleStrength: number;// 0.0 to 1.0 (capillary wave shear & droplet ripple amplitude)
+  shingleRoughness: number;  // 0.0 to 1.0 (crease ridge catchlight & tucked overlap shadow)
+  windBreeze: number;        // 0.0 to 1.0 (pleated bough sway & guardian breathing)
 }
 
 export const CAMERA_PRESETS: CameraPreset[] = [
   {
     id: 'pond-mirror',
     label: 'Pond Mirror',
-    subtitle: 'Central vignette — crouching paper guardian, overarching paper canopy, sky wash & pond mirror',
-    position: [0.0, 2.48, 10.15],
-    target: [0.0, 0.42, 0.04],
-    fov: 38,
+    subtitle: 'Hero composition — crouching shingle-paper guardian, airy autumn woodland & clear inverted pond reflection',
+    position: [0.04, 1.88, 9.65],
+    target: [0.02, 0.12, 0.32],
+    fov: 40,
   },
   {
     id: 'guardian-portrait',
-    label: 'Paper Cut Study',
-    subtitle: 'Macro study of creased paper shingles, folded paper trunks, 6 torn sheets & stacked paper canopy',
-    position: [1.42, 2.02, 4.85],
-    target: [0.0, 1.12, -0.52],
+    label: 'Origami & Face Study',
+    subtitle: 'Close study of V-brow visor, pointed wedge nose, radial cedar ruff & vertical shingle courses',
+    position: [0.92, 1.48, 3.55],
+    target: [-0.02, 0.86, -0.26],
     fov: 35,
   },
   {
     id: 'shoreline-macro',
-    label: 'Waterline Glaze',
-    subtitle: 'Low grazing view across splayed paper fingers, 6-step shoreline & Kubelka-Munk ripples',
-    position: [-2.12, 1.34, 6.45],
-    target: [0.02, 0.42, 0.18],
+    label: 'Waterline & Fingers',
+    subtitle: 'Grazing view across splayed shoreline fingers, central stone, Fuchidori rings & guardian mirror',
+    position: [-1.72, 1.12, 5.25],
+    target: [0.02, 0.08, 0.42],
     fov: 37,
   },
   {
     id: 'canopy-overlook',
-    label: 'Island Vignette',
-    subtitle: 'Elevated overview of the vaulted paper canopy, 6-sheet deckle island & oval watercolor pond',
-    position: [0.22, 3.45, 11.4],
-    target: [0.0, 0.36, -0.06],
-    fov: 39,
+    label: 'Woodland Cove',
+    subtitle: 'Wide watercolor vignette — airy woodland trunks, translucent washes, pond puddle & Washi margins',
+    position: [0.32, 2.78, 12.15],
+    target: [0.06, 0.28, 0.16],
+    fov: 40,
   },
 ];
 
@@ -73,47 +73,47 @@ export const PALETTE_PRESETS: PaperPalettePreset[] = [
   {
     id: 'autumn-tannin',
     label: 'Autumn Tannin',
-    subtitle: 'Weathered silver-grey cedar, warm russet collar, slate-ochre sky wash & olive-amber pond',
+    subtitle: 'Silver-driftwood Washi, russet-cedar ruff, airy ochre-olive washes & olive-amber pond mirror',
     paperBgHex: '#f2ebd9',
     paperBackingRGB: [0.949, 0.922, 0.851],
-    shingleWeatherRGB: [0.68, 0.66, 0.61],
-    collarWarmCedarRGB: [0.58, 0.43, 0.31],
-    pondDeepMossRGB: [0.22, 0.24, 0.12],
-    pondAmberTanninRGB: [0.44, 0.35, 0.16],
-    canopyOliveRGB: [0.39, 0.44, 0.28],
-    leafLitterRGB: [0.52, 0.37, 0.26],
-    skyZenithRGB: [0.46, 0.57, 0.66],
-    skyHorizonRGB: [0.84, 0.70, 0.48],
+    shingleWeatherRGB: [0.64, 0.62, 0.57],
+    collarWarmCedarRGB: [0.54, 0.38, 0.26],
+    pondDeepMossRGB: [0.22, 0.26, 0.13],
+    pondAmberTanninRGB: [0.45, 0.36, 0.18],
+    canopyOliveRGB: [0.33, 0.39, 0.23],
+    leafLitterRGB: [0.49, 0.36, 0.25],
+    skyZenithRGB: [0.55, 0.65, 0.73],
+    skyHorizonRGB: [0.89, 0.80, 0.62],
   },
   {
     id: 'sumi-celadon',
     label: 'Bokusai Celadon',
-    subtitle: 'Aged hinoki wood, pine-soot shadows, mineral celadon sky mist & malachite-indigo water',
+    subtitle: 'Aged hinoki paper, pine-soot crease shadows, mineral celadon sky mist & malachite-olive water',
     paperBgHex: '#efe8d5',
     paperBackingRGB: [0.937, 0.910, 0.835],
-    shingleWeatherRGB: [0.64, 0.65, 0.62],
-    collarWarmCedarRGB: [0.51, 0.41, 0.33],
-    pondDeepMossRGB: [0.15, 0.25, 0.22],
-    pondAmberTanninRGB: [0.28, 0.39, 0.32],
-    canopyOliveRGB: [0.33, 0.45, 0.36],
-    leafLitterRGB: [0.47, 0.38, 0.30],
-    skyZenithRGB: [0.38, 0.52, 0.58],
-    skyHorizonRGB: [0.74, 0.73, 0.58],
+    shingleWeatherRGB: [0.61, 0.62, 0.58],
+    collarWarmCedarRGB: [0.48, 0.38, 0.30],
+    pondDeepMossRGB: [0.17, 0.26, 0.21],
+    pondAmberTanninRGB: [0.30, 0.39, 0.30],
+    canopyOliveRGB: [0.29, 0.40, 0.32],
+    leafLitterRGB: [0.45, 0.37, 0.29],
+    skyZenithRGB: [0.46, 0.58, 0.65],
+    skyHorizonRGB: [0.79, 0.77, 0.64],
   },
   {
     id: 'golden-ochre',
     label: 'Late Sun Ochre',
-    subtitle: 'Sun-bleached driftwood shingles, burnt sienna bank, amber-twilight wash & golden reflection',
+    subtitle: 'Sun-bleached kozo Washi, warm sienna bank, low afternoon clearing sun & amber-olive mirror',
     paperBgHex: '#f5eedc',
     paperBackingRGB: [0.961, 0.933, 0.863],
-    shingleWeatherRGB: [0.73, 0.69, 0.62],
-    collarWarmCedarRGB: [0.64, 0.45, 0.29],
-    pondDeepMossRGB: [0.26, 0.25, 0.13],
-    pondAmberTanninRGB: [0.55, 0.41, 0.18],
-    canopyOliveRGB: [0.46, 0.47, 0.27],
-    leafLitterRGB: [0.59, 0.41, 0.27],
-    skyZenithRGB: [0.50, 0.58, 0.67],
-    skyHorizonRGB: [0.88, 0.67, 0.42],
+    shingleWeatherRGB: [0.68, 0.64, 0.58],
+    collarWarmCedarRGB: [0.59, 0.41, 0.27],
+    pondDeepMossRGB: [0.25, 0.27, 0.14],
+    pondAmberTanninRGB: [0.52, 0.40, 0.19],
+    canopyOliveRGB: [0.39, 0.43, 0.25],
+    leafLitterRGB: [0.55, 0.39, 0.26],
+    skyZenithRGB: [0.55, 0.63, 0.71],
+    skyHorizonRGB: [0.91, 0.75, 0.52],
   },
 ];
 

@@ -116,7 +116,7 @@ export function App() {
         </div>
         <h1 className="field-title">The Pond Guardian</h1>
         <p className="field-subtitle">
-          Layered cedar-shingle paper sculpture &amp; Kubelka-Munk botanical pond reflection.
+          Compressed origami-washi guardian, pleated woodland canopy &amp; Kubelka-Munk pond mirror.
           Sweep to bloom pigment; drag to orbit; click the water to cast ripples.
         </p>
       </header>
@@ -235,7 +235,7 @@ export function App() {
 
             <label className="slider-row">
               <div className="slider-label-line">
-                <span>Cedar Shingle Grain &amp; Fold</span>
+                <span>Crease Ridge &amp; Tuck Overlap</span>
                 <span className="slider-val">{Math.round(params.shingleRoughness * 100)}%</span>
               </div>
               <input
