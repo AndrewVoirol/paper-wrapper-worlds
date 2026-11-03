@@ -2,6 +2,7 @@ node_modules
 dist
 .DS_Store
 *.local
+*.tsbuildinfo
 screenshots/tmp
 .agents/hooks.json
 !.agents/skills/

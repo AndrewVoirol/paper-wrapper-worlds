@@ -1,3 +1,5 @@
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect } from 'vitest';
 import {
   generateGuardianShingles,
@@ -10,7 +12,8 @@ import {
   createFoldedPaperLeafGeometry,
   createOrigamiFloatingLeafGeometry,
 } from '../shaders/paperCraftShader';
-import { CAMERA_PRESETS, PALETTE_PRESETS, DEFAULT_PARAMS } from '../types';
+import { CAMERA_PRESETS, PALETTE_PRESETS, DEFAULT_PARAMS, STORY_PLATES } from '../types';
+import { App } from '../App';
 
 describe('Paper-Wrapper Worlds — Guardian Sculpture & Optical Preset Contracts', () => {
   it('generates deterministic cedar shingle placements covering torso, warm collar, head, arms, 5 fingers & feet', () => {
@@ -68,6 +71,7 @@ describe('Paper-Wrapper Worlds — Guardian Sculpture & Optical Preset Contracts
       }
     }
 
+    expect(DEFAULT_PARAMS.paletteId).toBe('autumn-tannin');
     expect(DEFAULT_PARAMS.paperTooth).toBeGreaterThan(0);
     expect(DEFAULT_PARAMS.watercolorBleed).toBeGreaterThan(0);
   });
@@ -91,5 +95,34 @@ describe('Paper-Wrapper Worlds — Guardian Sculpture & Optical Preset Contracts
       expect(card.itemSize).toBe(2);
       expect(card.count).toBe(pos.count);
     }
+  });
+
+  it('renders the locked single-edition Little Nis Bernheim Forest folio with zero sliders, pills, or debug jargon', () => {
+    expect(STORY_PLATES.length).toBe(5);
+    const presetIds = new Set(CAMERA_PRESETS.map((p) => p.id));
+    for (const plate of STORY_PLATES) {
+      expect(presetIds.has(plate.presetId)).toBe(true);
+      expect(plate.desktopOffset[0]).toBeLessThan(0); // Shifts 3D subject into right stage on wide screens
+    }
+
+    const html = renderToStaticMarkup(React.createElement(App));
+
+    // Zero range sliders or debug telemetry / shader jargon in user-facing UI
+    expect(html).not.toContain('type="range"');
+    expect(html).not.toContain('Kubelka-Munk');
+    expect(html).not.toContain('Paper &amp; Glaze Studio');
+    expect(html).not.toContain('The Pond Guardian');
+
+    // Authentic Little Nis & Bernheim Forest, Kentucky story arc & colophon provenance
+    expect(html).toContain('Little Nis');
+    expect(html).toContain('Bernheim Forest');
+    expect(html).toContain('Holly Pond');
+    expect(html).toContain('Thomas Dambo');
+    expect(html).toContain('While the Weather Got Better');
+    expect(html).toContain('Pieced from Forgotten Wood');
+    expect(html).toContain('Hands on the Mossy Bank');
+    expect(html).toContain('Familiar, Yet So Strange');
+    expect(html).toContain('Settle Holly Pond');
+    expect(html).toContain('Back to Trailhead');
   });
 });

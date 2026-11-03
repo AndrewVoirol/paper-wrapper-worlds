@@ -4,6 +4,7 @@ import {
   CAMERA_PRESETS,
   DEFAULT_PARAMS,
   PALETTE_PRESETS,
+  STORY_PLATES,
   type CameraPreset,
   type SimulationParams,
   type TelemetryState,
@@ -51,7 +52,20 @@ export class PaperWorldEngine {
   private readonly hitPoint = new THREE.Vector3();
   private readonly targetCamPos = new THREE.Vector3(...CAMERA_PRESETS[0].position);
   private readonly targetLookAt = new THREE.Vector3(...CAMERA_PRESETS[0].target);
+  private targetFov = CAMERA_PRESETS[0].fov;
+  private currentFov = CAMERA_PRESETS[0].fov;
+  private readonly targetNormOffset = new THREE.Vector2(0, 0);
+  private readonly currentNormOffset = new THREE.Vector2(0, 0);
+  private viewportWidth = 1;
+  private viewportHeight = 1;
   private isTransitioningCamera = false;
+
+  // Pointer drag vs click discrimination so pond clicks don't interrupt scroll choreography
+  private readonly pointerDownClient = new THREE.Vector2(0, 0);
+  private isPointerDown = false;
+  private isUserOrbiting = false;
+  private scrollProgress = 0;
+  private lastActivePlateIndex = 0;
 
   // Ring buffer indices for interactive wash stamps & pond ripples
   private washSlotIndex = 0;
@@ -63,16 +77,25 @@ export class PaperWorldEngine {
   private lastTelemetryTime = 0;
   private smoothedFrameMs = 7.8;
   private onTelemetry?: (state: TelemetryState) => void;
+  private interactionTarget?: HTMLElement;
+  private boundDomTarget?: HTMLElement;
   private disposed = false;
 
-  constructor(container: HTMLElement, onTelemetry?: (state: TelemetryState) => void) {
+  constructor(
+    container: HTMLElement,
+    onTelemetry?: (state: TelemetryState) => void,
+    interactionTarget?: HTMLElement
+  ) {
     this.container = container;
     this.onTelemetry = onTelemetry;
+    this.interactionTarget = interactionTarget;
   }
 
   public async init(): Promise<void> {
     const width = Math.max(1, this.container.clientWidth || window.innerWidth);
     const height = Math.max(1, this.container.clientHeight || window.innerHeight);
+    this.viewportWidth = width;
+    this.viewportHeight = height;
 
     this.renderer = new THREE.WebGPURenderer({
       antialias: true,
@@ -103,19 +126,26 @@ export class PaperWorldEngine {
     this.camera = new THREE.PerspectiveCamera(initialPreset.fov, width / height, 0.1, 90);
     this.camera.position.set(...initialPreset.position);
 
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    const controlSurface = this.interactionTarget ?? this.renderer.domElement;
+    this.boundDomTarget = controlSurface;
+    // Register before OrbitControls so pointerdowns on prose slips or buttons never trigger setPointerCapture
+    controlSurface.addEventListener('pointerdown', this.guardCardPointerDown);
+
+    this.controls = new OrbitControls(this.camera, controlSurface);
     this.controls.target.set(...initialPreset.target);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.065;
+    this.controls.enableZoom = false;
+    this.controls.enablePan = false;
     this.controls.maxPolarAngle = Math.PI * 0.485;
     this.controls.minPolarAngle = 0.14;
     this.controls.minDistance = 2.4;
     this.controls.maxDistance = 18.5;
-    this.controls.update();
+    controlSurface.style.touchAction = 'pan-y';
 
-    this.controls.addEventListener('start', () => {
-      this.isTransitioningCamera = false;
-    });
+    // Initialize opening bookplate framing offset immediately so frame 0 matches scrollY = 0
+    this.setScrollProgress(0, width < 920, true);
+    this.controls.update();
 
     // 1. Build continuous sculpted origami sheet (head, gentle face, sleeves & V-channel fingers)
     this.guardianSheetUpright = createGuardianSculptedSheetMesh(this.uniforms, false, WATER_LEVEL_Y);
@@ -148,7 +178,9 @@ export class PaperWorldEngine {
     // Bind pointer, resize & pagehide listeners
     window.addEventListener('resize', this.handleResize);
     window.addEventListener('pagehide', this.handlePageHide);
-    const dom = this.renderer.domElement;
+    window.addEventListener('pointerup', this.handleWindowPointerUp);
+    window.addEventListener('pointercancel', this.handleWindowPointerUp);
+    const dom = this.boundDomTarget ?? this.renderer.domElement;
     dom.addEventListener('pointermove', this.handlePointerMove);
     dom.addEventListener('pointerdown', this.handlePointerDown);
     dom.addEventListener('pointerleave', this.handlePointerLeave);
@@ -157,6 +189,9 @@ export class PaperWorldEngine {
     (window as any).__PAPER_WORLD__ = {
       engine: this,
       setPreset: (id: CameraPreset['id']) => this.setCameraPreset(id, true),
+      setScrollProgress: (u: number, compact?: boolean, immediate = false) =>
+        this.setScrollProgress(u, compact ?? this.viewportWidth < 920, immediate),
+      recenterView: () => this.recenterToScroll(),
       setParams: (p: Partial<SimulationParams>) => this.updateParams(p),
       spawnRipple: (x: number, z: number, strength = 0.85) => this.spawnPondRipple(x, z, strength),
       stampWash: (x: number, z: number, radius = 2.45) => this.stampWashTrail(x, z, radius),
@@ -173,13 +208,41 @@ export class PaperWorldEngine {
     }
   };
 
+  private applyCameraProjection(): void {
+    if (!this.camera) return;
+    this.camera.fov = this.currentFov;
+    const ox = this.currentNormOffset.x * this.viewportWidth;
+    const oy = this.currentNormOffset.y * this.viewportHeight;
+    if (Math.abs(ox) > 0.25 || Math.abs(oy) > 0.25) {
+      this.camera.setViewOffset(
+        this.viewportWidth,
+        this.viewportHeight,
+        ox,
+        oy,
+        this.viewportWidth,
+        this.viewportHeight
+      );
+    } else {
+      this.camera.clearViewOffset();
+    }
+    this.camera.updateProjectionMatrix();
+  }
+
   private handleResize = (): void => {
     if (!this.renderer || !this.camera || this.disposed) return;
     const width = Math.max(1, this.container.clientWidth || window.innerWidth);
     const height = Math.max(1, this.container.clientHeight || window.innerHeight);
+    this.viewportWidth = width;
+    this.viewportHeight = height;
     this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
+    // Update target offset if crossing compact/wide breakpoint while staying smoothly framed
+    this.setScrollProgress(this.scrollProgress, width < 920, false);
+    this.applyCameraProjection();
     this.renderer.setSize(width, height);
+  };
+
+  private handleWindowPointerUp = (): void => {
+    this.isPointerDown = false;
   };
 
   private updateRayFromEvent(ev: PointerEvent): boolean {
@@ -191,6 +254,17 @@ export class PaperWorldEngine {
   }
 
   private handlePointerMove = (ev: PointerEvent): void => {
+    if (this.isPointerDown) {
+      const dragPx = Math.hypot(
+        ev.clientX - this.pointerDownClient.x,
+        ev.clientY - this.pointerDownClient.y
+      );
+      if (dragPx > 5) {
+        this.isUserOrbiting = true;
+        this.isTransitioningCamera = false;
+      }
+    }
+
     if (!this.updateRayFromEvent(ev)) return;
 
     const hx = THREE.MathUtils.clamp(this.hitPoint.x, -4.65, 4.65);
@@ -212,7 +286,17 @@ export class PaperWorldEngine {
     }
   };
 
+  private guardCardPointerDown = (ev: PointerEvent): void => {
+    const target = ev.target as Element | null;
+    if (target?.closest('button, a, .prologue-folio-block, .folio-passage-sheet')) {
+      ev.stopImmediatePropagation();
+    }
+  };
+
   private handlePointerDown = (ev: PointerEvent): void => {
+    this.isPointerDown = true;
+    this.pointerDownClient.set(ev.clientX, ev.clientY);
+
     if (!this.updateRayFromEvent(ev)) return;
     const hx = THREE.MathUtils.clamp(this.hitPoint.x, -4.65, 4.65);
     const hz = THREE.MathUtils.clamp(this.hitPoint.z, -3.65, 5.85);
@@ -252,18 +336,115 @@ export class PaperWorldEngine {
     this.rippleSlotIndex = (this.rippleSlotIndex + 1) % 4;
   }
 
+  private findPreset(id: CameraPreset['id']): CameraPreset {
+    for (let i = 0; i < CAMERA_PRESETS.length; i++) {
+      if (CAMERA_PRESETS[i].id === id) return CAMERA_PRESETS[i];
+    }
+    return CAMERA_PRESETS[0];
+  }
+
+  /**
+   * Choreographs camera position, lookAt target, field-of-view, and responsive folio viewOffset
+   * continuously across normalized scroll progress `u in [0, 1]` with gentle dwell plateaus
+   * at each story plate (`u = 0, 0.25, 0.50, 0.75, 1.00`).
+   */
+  public setScrollProgress(
+    progress: number,
+    isCompactViewport = false,
+    immediate = false
+  ): void {
+    const u = THREE.MathUtils.clamp(progress, 0, 1);
+    this.scrollProgress = u;
+
+    const segCount = STORY_PLATES.length - 1; // 4 transitions across 5 plates
+    const scaled = u * segCount;
+    const idxA = Math.min(segCount - 1, Math.max(0, Math.floor(scaled)));
+    const idxB = idxA + 1;
+    const localU = scaled - idxA;
+
+    // Dwell plateau (18% at each plate center) + Hermite smoothstep glide between plates
+    const dwell = 0.18;
+    const rawT = THREE.MathUtils.clamp((localU - dwell) / (1.0 - 2.0 * dwell), 0.0, 1.0);
+    const t = rawT * rawT * (3.0 - 2.0 * rawT);
+
+    const plateA = STORY_PLATES[idxA];
+    const plateB = STORY_PLATES[idxB];
+    const presetA = this.findPreset(plateA.presetId);
+    const presetB = this.findPreset(plateB.presetId);
+
+    this.targetCamPos.set(
+      THREE.MathUtils.lerp(presetA.position[0], presetB.position[0], t),
+      THREE.MathUtils.lerp(presetA.position[1], presetB.position[1], t),
+      THREE.MathUtils.lerp(presetA.position[2], presetB.position[2], t)
+    );
+    this.targetLookAt.set(
+      THREE.MathUtils.lerp(presetA.target[0], presetB.target[0], t),
+      THREE.MathUtils.lerp(presetA.target[1], presetB.target[1], t),
+      THREE.MathUtils.lerp(presetA.target[2], presetB.target[2], t)
+    );
+    this.targetFov = THREE.MathUtils.lerp(presetA.fov, presetB.fov, t);
+
+    const offA = isCompactViewport ? plateA.mobileOffset : plateA.desktopOffset;
+    const offB = isCompactViewport ? plateB.mobileOffset : plateB.desktopOffset;
+    this.targetNormOffset.set(
+      THREE.MathUtils.lerp(offA[0], offB[0], t),
+      THREE.MathUtils.lerp(offA[1], offB[1], t)
+    );
+
+    const activePlateIdx = Math.round(scaled);
+    if (activePlateIdx !== this.lastActivePlateIndex) {
+      if (this.renderer) {
+        if (activePlateIdx === 1) {
+          // Arriving on the Bernheim Arboretum trail blooms warm autumn wash along the woodland bank
+          this.stampWashTrail(2.15, -0.45, 2.35);
+        } else if (activePlateIdx === 3) {
+          // Answer Plate III ("Hands on the Mossy Bank") with a shoreline ripple off Little Nis's left fingers
+          this.spawnPondRipple(-1.12, 0.88, 0.68);
+        } else if (activePlateIdx === 4) {
+          // Answer Plate IV ("Familiar, Yet So Strange") with a quiet droplet ring over his reflection
+          this.spawnPondRipple(0.08, 1.38, 0.62);
+        }
+      }
+      this.lastActivePlateIndex = activePlateIdx;
+    }
+
+    this.params.presetId = STORY_PLATES[activePlateIdx].presetId;
+    this.isUserOrbiting = false;
+
+    if (immediate && this.camera && this.controls) {
+      this.camera.position.copy(this.targetCamPos);
+      this.controls.target.copy(this.targetLookAt);
+      this.currentFov = this.targetFov;
+      this.currentNormOffset.copy(this.targetNormOffset);
+      this.applyCameraProjection();
+      this.controls.update();
+      this.isTransitioningCamera = false;
+    } else {
+      this.isTransitioningCamera = true;
+    }
+  }
+
+  public recenterToScroll(): void {
+    this.setScrollProgress(this.scrollProgress, this.viewportWidth < 920, false);
+    this.spawnPondRipple(0.0, 1.12, 0.72);
+  }
+
   public setCameraPreset(presetId: CameraPreset['id'], immediate = false): void {
     const preset = CAMERA_PRESETS.find((p) => p.id === presetId);
     if (!preset) return;
     this.params.presetId = presetId;
     this.targetCamPos.set(...preset.position);
     this.targetLookAt.set(...preset.target);
-    this.camera.fov = preset.fov;
-    this.camera.updateProjectionMatrix();
+    this.targetFov = preset.fov;
+    this.targetNormOffset.set(0, 0);
+    this.isUserOrbiting = false;
 
     if (immediate) {
       this.camera.position.copy(this.targetCamPos);
       this.controls.target.copy(this.targetLookAt);
+      this.currentFov = this.targetFov;
+      this.currentNormOffset.set(0, 0);
+      this.applyCameraProjection();
       this.controls.update();
       this.isTransitioningCamera = false;
     } else {
@@ -350,14 +531,30 @@ export class PaperWorldEngine {
       this.lastRippleTime = elapsed;
     }
 
-    if (this.isTransitioningCamera) {
-      const alpha = 1.0 - Math.exp(-dt * 5.5);
+    if (this.isTransitioningCamera && !this.isUserOrbiting) {
+      const alpha = 1.0 - Math.exp(-dt * 4.8);
       this.camera.position.lerp(this.targetCamPos, alpha);
       this.controls.target.lerp(this.targetLookAt, alpha);
+
+      const fovDelta = Math.abs(this.targetFov - this.currentFov);
+      const offDeltaSq = this.currentNormOffset.distanceToSquared(this.targetNormOffset);
+      if (fovDelta > 0.002 || offDeltaSq > 1e-7) {
+        this.currentFov = THREE.MathUtils.lerp(this.currentFov, this.targetFov, alpha);
+        this.currentNormOffset.lerp(this.targetNormOffset, alpha);
+        this.applyCameraProjection();
+      }
+
       if (
-        this.camera.position.distanceToSquared(this.targetCamPos) < 0.002 &&
-        this.controls.target.distanceToSquared(this.targetLookAt) < 0.002
+        this.camera.position.distanceToSquared(this.targetCamPos) < 0.0008 &&
+        this.controls.target.distanceToSquared(this.targetLookAt) < 0.0008 &&
+        fovDelta <= 0.002 &&
+        offDeltaSq <= 1e-7
       ) {
+        this.camera.position.copy(this.targetCamPos);
+        this.controls.target.copy(this.targetLookAt);
+        this.currentFov = this.targetFov;
+        this.currentNormOffset.copy(this.targetNormOffset);
+        this.applyCameraProjection();
         this.isTransitioningCamera = false;
       }
     }
@@ -367,9 +564,9 @@ export class PaperWorldEngine {
 
     const frameMs = dt * 1000;
     this.smoothedFrameMs = this.smoothedFrameMs * 0.9 + frameMs * 0.1;
-    if (timestamp - this.lastTelemetryTime > 480) {
+    if (this.onTelemetry && timestamp - this.lastTelemetryTime > 480) {
       this.lastTelemetryTime = timestamp;
-      this.onTelemetry?.(this.getSnapshotTelemetry());
+      this.onTelemetry(this.getSnapshotTelemetry());
     }
   };
 
@@ -378,8 +575,11 @@ export class PaperWorldEngine {
     this.disposed = true;
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('pagehide', this.handlePageHide);
-    if (this.renderer?.domElement) {
-      const dom = this.renderer.domElement;
+    window.removeEventListener('pointerup', this.handleWindowPointerUp);
+    window.removeEventListener('pointercancel', this.handleWindowPointerUp);
+    const dom = this.boundDomTarget ?? this.renderer?.domElement;
+    if (dom) {
+      dom.removeEventListener('pointerdown', this.guardCardPointerDown);
       dom.removeEventListener('pointermove', this.handlePointerMove);
       dom.removeEventListener('pointerdown', this.handlePointerDown);
       dom.removeEventListener('pointerleave', this.handlePointerLeave);

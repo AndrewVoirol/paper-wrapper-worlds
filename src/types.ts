@@ -37,32 +37,32 @@ export interface SimulationParams {
 export const CAMERA_PRESETS: CameraPreset[] = [
   {
     id: 'pond-mirror',
-    label: 'Pond Mirror',
-    subtitle: 'Hero composition — crouching shingle-paper guardian, airy autumn woodland & clear inverted pond reflection',
+    label: 'Holly Pond Mirror',
+    subtitle: 'Hero composition — Little Nis crouching at the edge of Holly Pond above his clear inverted reflection',
     position: [0.04, 1.88, 9.65],
     target: [0.02, 0.12, 0.32],
     fov: 40,
   },
   {
     id: 'guardian-portrait',
-    label: 'Origami & Face Study',
-    subtitle: 'Close study of V-brow visor, pointed wedge nose, radial cedar ruff & vertical shingle courses',
+    label: 'Little Nis Portrait',
+    subtitle: 'Close study of Little Nis’s furrowed brow, wedge nose, russet collar & reclaimed plank courses',
     position: [0.92, 1.48, 3.55],
     target: [-0.02, 0.86, -0.26],
     fov: 35,
   },
   {
     id: 'shoreline-macro',
-    label: 'Waterline & Fingers',
-    subtitle: 'Grazing view across splayed shoreline fingers, central stone, Fuchidori rings & guardian mirror',
+    label: 'Holly Pond Bank & Hands',
+    subtitle: 'Grazing view across Little Nis’s splayed wooden hands on the mossy Holly Pond bank',
     position: [-1.72, 1.12, 5.25],
     target: [0.02, 0.08, 0.42],
     fov: 37,
   },
   {
     id: 'canopy-overlook',
-    label: 'Woodland Cove',
-    subtitle: 'Wide watercolor vignette — airy woodland trunks, translucent washes, pond puddle & Washi margins',
+    label: 'Bernheim Trail Clearing',
+    subtitle: 'Wide Bernheim Arboretum clearing — autumn trees, translucent washes, Holly Pond & Washi margins',
     position: [0.32, 2.78, 12.15],
     target: [0.06, 0.28, 0.16],
     fov: 40,
@@ -143,3 +143,94 @@ export interface TelemetryState {
   revealCoverage: number;
   backend: string;
 }
+
+export interface StoryPlate {
+  id: 'prologue' | 'plate-1' | 'plate-2' | 'plate-3' | 'plate-4';
+  numeral: '0' | 'I' | 'II' | 'III' | 'IV';
+  folioLabel: string;
+  shortStopLabel: string;
+  plateCounter?: string;
+  runningCaption: string;
+  title: string;
+  subtitle?: string;
+  body: string;
+  whisperCue: string;
+  presetId: CameraPreset['id'];
+  /** Normalized camera viewOffset [x, y] on wide viewports (>= 920px). Negative x shifts 3D subject right. */
+  desktopOffset: [number, number];
+  /** Normalized camera viewOffset [x, y] on compact viewports (< 920px). Positive y shifts 3D subject upward. */
+  mobileOffset: [number, number];
+}
+
+export const STORY_PLATES: StoryPlate[] = [
+  {
+    id: 'prologue',
+    numeral: '0',
+    folioLabel: 'Trailhead',
+    shortStopLabel: 'Holly Pond',
+    runningCaption: 'HOLLY POND · BERNHEIM FOREST',
+    title: 'Little Nis',
+    subtitle: 'Forest Giants in a Giant Forest · Clermont, Kentucky',
+    body: 'At the edge of Holly Pond in Kentucky’s Bernheim Forest, the youngest of three wooden giants crouches on the mossy bank—peering into the still water at a face that looks both familiar and strange.',
+    whisperCue: 'Scroll to walk the trail · sweep the paper to wake the wash · touch Holly Pond',
+    presetId: 'pond-mirror',
+    desktopOffset: [-0.112, 0.01],
+    mobileOffset: [0.0, 0.11],
+  },
+  {
+    id: 'plate-1',
+    numeral: 'I',
+    folioLabel: 'Plate I · The Arboretum',
+    shortStopLabel: 'Bernheim Trail',
+    plateCounter: '01 / 04',
+    runningCaption: 'PLATE I · BERNHEIM FOREST',
+    title: 'While the Weather Got Better',
+    body: 'In Thomas Dambo’s forest tale, Isak Heartstone walked down from his lonely mountain to winter among Kentucky’s trees with Mama Loumari and their children, Little Elina and Little Nis. While his mother rests against a tree and his sister gathers stones, Nis slipped down the trail to this quiet pond.',
+    whisperCue: 'Sweep across the raw paper margin to bloom autumn wash along the trail.',
+    presetId: 'canopy-overlook',
+    desktopOffset: [-0.115, 0.01],
+    mobileOffset: [0.0, 0.11],
+  },
+  {
+    id: 'plate-2',
+    numeral: 'II',
+    folioLabel: 'Plate II · Salvaged Timber',
+    shortStopLabel: 'Forgotten Wood',
+    plateCounter: '02 / 04',
+    runningCaption: 'PLATE II · SALVAGED TIMBER',
+    title: 'Pieced from Forgotten Wood',
+    body: 'Built in the spring of 2019 for Bernheim’s ninetieth year, Little Nis was raised from discarded pallets and regional scrap lumber given a second life in the woods. Beneath a fanned russet collar and creased brow, his weathered ribs rise and fall with the hush of the clearing.',
+    whisperCue: 'Drag anywhere on the diorama to turn Little Nis in the clearing light.',
+    presetId: 'guardian-portrait',
+    desktopOffset: [-0.125, 0.0],
+    mobileOffset: [0.0, 0.12],
+  },
+  {
+    id: 'plate-3',
+    numeral: 'III',
+    folioLabel: 'Plate III · Holly Pond Bank',
+    shortStopLabel: 'Mossy Bank',
+    plateCounter: '03 / 04',
+    runningCaption: 'PLATE III · HOLLY POND BANK',
+    title: 'Hands on the Mossy Bank',
+    body: 'Ten wide wooden planks steady his crouch where the trail meets Holly Pond. Out in the real arboretum, visitors step onto his big wooden hands and feet to share his lookout—right where rough timber meets the dark ring of leaf-stained water.',
+    whisperCue: 'Click or sweep across Holly Pond to send ripples out from his fingertips.',
+    presetId: 'shoreline-macro',
+    desktopOffset: [-0.115, 0.0],
+    mobileOffset: [0.0, 0.11],
+  },
+  {
+    id: 'plate-4',
+    numeral: 'IV',
+    folioLabel: 'Plate IV · The Water Mirror',
+    shortStopLabel: 'Water Mirror',
+    plateCounter: '04 / 04',
+    runningCaption: 'PLATE IV · THE WATER MIRROR',
+    title: 'Familiar, Yet So Strange',
+    body: 'Walking out from the trees, Little Nis saw something in the water that looked “so familiar, yet so strange.” Beneath the drifting autumn leaves, a second boy of weathered planks hangs upside-down in olive and amber water—scattering into rings when a drop falls, then gathering himself whole again.',
+    whisperCue: 'Linger by the pond to orbit freely, or revisit any stop along the trail.',
+    presetId: 'pond-mirror',
+    desktopOffset: [-0.095, 0.01],
+    mobileOffset: [0.0, 0.11],
+  },
+];

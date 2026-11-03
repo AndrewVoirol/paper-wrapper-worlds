@@ -1,8 +1,8 @@
-![The Pond Guardian — Paper & Watercolor WebGPU Diorama](screenshots/initial-state.webp)
+![Little Nis — Bernheim Forest Paper & Watercolor WebGPU Diorama](screenshots/initial-state.webp)
 
-# Paper-Wrapper Worlds — The Pond Guardian
+# Paper-Wrapper Worlds — Little Nis (Bernheim Forest)
 
-An interactive **Three.js `r187` `WebGPURenderer` + `TSL` (`three/tsl`)** diorama translating a wooden shingle forest troll sculpture crouching beside a woodland pond into tactile cold-press paper shaders and multi-layer Kubelka-Munk watercolor washes.
+A scroll-choreographed **Three.js `r187` `WebGPURenderer` + `TSL` (`three/tsl`)** folklore folio telling the story of **Little Nis**—the curious young wooden giant built by Thomas Dambo from reclaimed regional wood beside Holly Pond in Kentucky’s **Bernheim Arboretum and Research Forest** (*Forest Giants in a Giant Forest*, 2019)—rendered in folded cold-press Washi paper and multi-layer watercolor washes.
 
 ## Quick Start
 
@@ -15,21 +15,21 @@ npm install
 npm run dev
 ```
 
-## Visual States & Camera Presets
+## Trail Stops & Folio Plates
 
-| Pond Mirror (Default Framing) | Shingle Study (Close Portrait) |
+| Trailhead — Little Nis at Holly Pond | Plate I — While the Weather Got Better |
 | :---: | :---: |
-| ![Pond Mirror](screenshots/initial-state.webp) | ![Shingle Study](screenshots/shingle-study.webp) |
-| **Waterline Glaze (Bokusai Celadon)** | **Diorama Island (Late Sun Ochre)** |
-| ![Waterline Glaze](screenshots/waterline-glaze.webp) | ![Diorama Island](screenshots/diorama-island.webp) |
+| ![Trailhead — Little Nis at Holly Pond](screenshots/initial-state.webp) | ![Plate I — While the Weather Got Better](screenshots/diorama-island.webp) |
+| **Plate II — Pieced from Forgotten Wood** | **Plate III — Hands on the Mossy Bank** |
+| ![Plate II — Pieced from Forgotten Wood](screenshots/shingle-study.webp) | ![Plate III — Hands on the Mossy Bank](screenshots/waterline-glaze.webp) |
 
 ## How It Works
 
-- **Sweep to Bloom Watercolor Wash**: Move the cursor across the diorama to bloom pigment and paper fiber detail along the edge of the floating island, or switch between **Brush Wash Reveal** and **Full Panorama** in the studio drawer.
-- **Drag to Orbit & Inspect**: Orbit 360° around the 778-shingle wooden guardian, or jump between 4 curated camera viewpoints (**Pond Mirror**, **Shingle Study**, **Waterline Glaze**, and **Diorama Island**) in the bottom dock.
-- **Click the Pond to Cast Ripples**: Clicking or sweeping across the water surface spawns radial capillary-gravity waves that shear the inverted 3D reflection of the guardian and forest canopy below.
+- **Walk the Bernheim Trail**: Scroll down the Washi sheet (or select `§` and `I–IV` along the right spine) to follow Little Nis’s story from the Bernheim Arboretum trail (`While the Weather Got Better`) up to his reclaimed pallet and scrap-wood ribs, down to his ten splayed wooden hands on the bank of Holly Pond, and into his twin reflection below.
+- **Sweep to Wake the Wash**: Move the brush cursor across the raw paper margin to bloom autumn pigment and bast-fiber detail along the edge of the woodland clearing.
+- **Drag to Orbit & Touch Holly Pond**: Drag anywhere on the diorama to turn Little Nis in the clearing light, or click and sweep across the pond to send capillary ripples through his reflection.
 
-Under the hood, all solid geometry (the barrel-chested cedar-shingle torso, radially fanned russet neck ruff, furrowed V-brow head, articulated plank arms with 5 splayed shoreline fingers, limestone slabs, and woodland trees) is rendered in a single instanced TSL shader pipeline (`paperCraftShader.ts`). Pigment layers evaluate physical **Kubelka-Munk 2-flux radiative transfer** ($\coth(b S d)$) over warm unbleached Washi paper (`#f2ebd9`) with sinuous bast-fiber FBM grain and evaporative contact-line pinning (*Fuchidori* `縁取り`).
+All solid geometry (the sculpted origami face and arms, 776 tucked wooden courses, radially fanned russet collar, 6-layer torn woodland island, and pleated birch crowns) renders in a unified TSL node pipeline (`paperCraftShader.ts`, `watercolorPondShader.ts`). Pigment glazes evaluate **Kubelka-Munk 2-flux radiative transfer** ($\coth(b S d)$) directly against warm unbleached Washi paper (`#f2ebd9`) with sinuous bast-fiber FBM grain and evaporative contact-line pinning (*Fuchidori* `縁取り`).
 
 ## Tech Stack
 
@@ -37,5 +37,5 @@ Under the hood, all solid geometry (the barrel-chested cedar-shingle torso, radi
 | :--- | :--- |
 | **Renderer** | Three.js `0.187.0` (`WebGPURenderer`) |
 | **Shading Language** | Three Shading Language (`three/tsl`) |
-| **UI Framework** | React `19.3` + Lucide Icons |
+| **UI & Typography** | React `19.3` · Cormorant Garamond & Plus Jakarta Sans |
 | **Build & Test** | Vite `8.3` + TypeScript `7.0` + Vitest `5.1` |

@@ -13,12 +13,12 @@
 
 ## 1. Creative & Architectural Identity
 
-**Paper-Wrapper Worlds (`The Pond Guardian`)** translates a real wooden shingle forest troll sculpture crouching beside a reflective woodland pond into an interactive **Three.js `r187` `WebGPURenderer` + `TSL` (`three/tsl`)** diorama on warm unbleached Washi/rag paper (`#f2ebd9`).
+**Paper-Wrapper Worlds (`Little Nis — Bernheim Forest`)** translates Thomas Dambo’s 2019 reclaimed-wood forest giant **Little Nis** crouching beside **Holly Pond** in **Bernheim Arboretum and Research Forest** (Clermont, Kentucky) into an interactive **Three.js `r187` `WebGPURenderer` + `TSL` (`three/tsl`)** diorama on warm unbleached Washi/rag paper (`#f2ebd9`).
 
-1. **Interactive Reveal Mask (`WashRevealController`)**:
-   - Like the Three.js `webgpu_tsl_vfx_linkedparticles` / watercolor diorama reference, the entire 3D world emerges through a soft, feathered watercolor wash mask on warm archival rag paper.
-   - Moving the pointer over the sculpture, trees, or pond blooms fresh pigment and fibrous paper detail along the cursor path (`uCursorWorld`, `uBrushRadius`) with organic FBM edge bleed and slow meditative relaxation.
-   - Users can toggle between **Interactive Wash Reveal** (cursor blooms detail around the core vignette) and **Full Botanical Panorama** (complete scene unfolded).
+1. **Scroll-Choreographed Bernheim Trail Folio & Interactive Wash (`App.tsx` + `PaperWorldEngine.ts`)**:
+   - The page is presented as a single-edition archival storybook folio (*Autumn Tannin* `#f2ebd9` with locked shader parameters—zero debug sliders, pill bars, or telemetry badges).
+   - Scrolling through the 5 trail stops (**Trailhead** + **Plates I–IV**: *While the Weather Got Better*, *Pieced from Forgotten Wood*, *Hands on the Mossy Bank*, and *Familiar, Yet So Strange*) continuously choreographs camera framing, FOV, and `camera.setViewOffset` so the diorama rests in the open right two-thirds of the sheet beside each folklore slip.
+   - Moving the pointer over the sculpture, trees, or pond blooms fresh pigment and fibrous paper detail along the cursor path (`uCursorWorld`, `uBrushRadius`) with organic FBM edge bleed; clicking Holly Pond casts ripples, and dragging anywhere on the diorama orbits freely until the next scroll or plate selection.
 2. **Tactile Paper-Cut & Cedar-Shingle Shader (`paperCraftShader.ts`)**:
    - All solid geometry (the crouching wooden shingle guardian, radially layered cedar collar, articulated plank arms and 5-splayed fingers, shoreline rocks, and multi-tiered woodland trunks/foliage) uses a custom TSL `MeshStandardNodeMaterial` combining:
      - **Sinuous Bast Fiber & Cold-Press Tooth**: Multi-octave irrational-angle FBM paper grain modulating surface normals and diffuse grazing light (`clamp(dot(N, L), 0.94, 1.06)`).
