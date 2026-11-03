@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { generateGuardianShingles } from '../scene/buildShingleGuardian';
+import {
+  createCreasedPaperStripGeometry,
+  createSculptedPaperTrunkGeometry,
+  createFoldedPaperLimbGeometry,
+  createFoldedPaperLeafGeometry,
+} from '../shaders/paperCraftShader';
 import { CAMERA_PRESETS, PALETTE_PRESETS, DEFAULT_PARAMS } from '../types';
 
 describe('Paper-Wrapper Worlds — Guardian Sculpture & Optical Preset Contracts', () => {
@@ -52,9 +58,32 @@ describe('Paper-Wrapper Worlds — Guardian Sculpture & Optical Preset Contracts
         expect(ch).toBeGreaterThan(0.05);
         expect(ch).toBeLessThan(0.6);
       }
+      for (const ch of [...pal.skyZenithRGB, ...pal.skyHorizonRGB]) {
+        expect(ch).toBeGreaterThan(0.1);
+        expect(ch).toBeLessThan(0.95);
+      }
     }
 
     expect(DEFAULT_PARAMS.paperTooth).toBeGreaterThan(0);
     expect(DEFAULT_PARAMS.watercolorBleed).toBeGreaterThan(0);
+  });
+
+  it('builds non-indexed flat-faceted paper geometries with explicit per-card aCardCoord attributes', () => {
+    for (const geom of [
+      createCreasedPaperStripGeometry(),
+      createSculptedPaperTrunkGeometry(),
+      createFoldedPaperLimbGeometry(),
+      createFoldedPaperLeafGeometry(),
+    ]) {
+      expect(geom.index).toBeNull();
+      const pos = geom.getAttribute('position');
+      const norm = geom.getAttribute('normal');
+      const card = geom.getAttribute('aCardCoord');
+      expect(pos).toBeDefined();
+      expect(norm).toBeDefined();
+      expect(card).toBeDefined();
+      expect(card.itemSize).toBe(2);
+      expect(card.count).toBe(pos.count);
+    }
   });
 });

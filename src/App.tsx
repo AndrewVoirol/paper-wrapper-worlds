@@ -212,7 +212,7 @@ export function App() {
                 onClick={() => handleParamChange('revealMode', 'full-diorama')}
               >
                 <Layers size={13} />
-                <span>Full Panorama</span>
+                <span>Full Vignette</span>
               </button>
             </div>
           </div>

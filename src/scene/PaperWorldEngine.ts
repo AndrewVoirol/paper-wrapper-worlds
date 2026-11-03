@@ -19,6 +19,8 @@ import { buildWoodlandDiorama } from './buildWoodlandDiorama';
  * Core Three.js `r187` `WebGPURenderer` + `TSL` Engine for Paper-Wrapper Worlds.
  * Manages:
  * - Zero-allocation `setAnimationLoop` with `THREE.Timer` (`r183+` canonical clock).
+ * - Exact IEC sRGB->Linear parity (`NoToneMapping`) so torn-paper & watercolor wash edges
+ *   converge to `0.000` RGB delta against `scene.background`.
  * - Smooth exponential camera preset transitions + OrbitControls exploration.
  * - Pointer raycasting against the pond plane and sculpture island to drive:
  *   1. Watercolor wash reveal trail blooms (`uWashTrail0..3`, `uCursorWorld`)
@@ -79,8 +81,8 @@ export class PaperWorldEngine {
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(width, height);
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.04;
+    // Use NoToneMapping so Kubelka-Munk physical reflectances & uPaperBacking match scene.background exactly
+    this.renderer.toneMapping = THREE.NoToneMapping;
 
     await this.renderer.init();
     if (this.disposed) return;
@@ -110,7 +112,7 @@ export class PaperWorldEngine {
     this.controls.maxPolarAngle = Math.PI * 0.485; // Keep camera above the paper table plane
     this.controls.minPolarAngle = 0.15;
     this.controls.minDistance = 2.6;
-    this.controls.maxDistance = 18.5;
+    this.controls.maxDistance = 16.5;
     this.controls.update();
 
     // Cancel automatic preset glide if the user grabs OrbitControls manually
@@ -118,35 +120,24 @@ export class PaperWorldEngine {
       this.isTransitioningCamera = false;
     });
 
-    // Warm studio & woodland skylight illumination
-    const hemiLight = new THREE.HemisphereLight(0xfcf6e8, 0x6e624c, 1.45);
-    hemiLight.position.set(0, 12, 0);
-    this.scene.add(hemiLight);
-
-    const sunLight = new THREE.DirectionalLight(0xfff5e0, 1.35);
-    sunLight.position.set(5.5, 9.5, 6.2);
-    this.scene.add(sunLight);
-
-    const rimLight = new THREE.DirectionalLight(0xdbe4d0, 0.55);
-    rimLight.position.set(-6.0, 4.5, -5.0);
-    this.scene.add(rimLight);
-
     // Build the crouching wooden shingle guardian + its inverted pond reflection
     const placements = generateGuardianShingles();
     this.shingleCount = placements.length;
     this.guardianUpright = createGuardianInstancedMesh(placements, this.uniforms, false, 0.0);
     this.guardianReflected = createGuardianInstancedMesh(placements, this.uniforms, true, 0.0);
+    this.guardianReflected.renderOrder = 1;
+    this.guardianUpright.renderOrder = 3;
     this.scene.add(this.guardianUpright);
     this.scene.add(this.guardianReflected);
 
-    // Build surrounding woodland diorama, shoreline stones, trees & watercolor pond
+    // Build surrounding tightly bound woodland diorama, torn-paper island & watercolor pond
     const diorama = buildWoodlandDiorama(this.uniforms);
     this.pondMesh = diorama.pondMesh;
     this.scene.add(diorama.rootGroup);
 
-    // Seed an initial gentle ripple near the guardian's left hand at boot
-    this.spawnPondRipple(-1.15, 0.85, 0.65);
-    this.spawnPondRipple(1.10, 0.92, 0.55);
+    // Seed gentle capillary ripples near the guardian's hands at boot
+    this.spawnPondRipple(-1.05, 0.82, 0.62);
+    this.spawnPondRipple(1.02, 0.88, 0.52);
 
     // Bind pointer & resize listeners
     window.addEventListener('resize', this.handleResize);
@@ -161,7 +152,7 @@ export class PaperWorldEngine {
       setPreset: (id: CameraPreset['id']) => this.setCameraPreset(id, true),
       setParams: (p: Partial<SimulationParams>) => this.updateParams(p),
       spawnRipple: (x: number, z: number, strength = 0.85) => this.spawnPondRipple(x, z, strength),
-      stampWash: (x: number, z: number, radius = 2.6) => this.stampWashTrail(x, z, radius),
+      stampWash: (x: number, z: number, radius = 2.05) => this.stampWashTrail(x, z, radius),
       getTelemetry: () => this.getSnapshotTelemetry(),
     };
 
@@ -189,34 +180,34 @@ export class PaperWorldEngine {
   private handlePointerMove = (ev: PointerEvent): void => {
     if (!this.updateRayFromEvent(ev)) return;
 
-    const hx = THREE.MathUtils.clamp(this.hitPoint.x, -5.0, 5.0);
-    const hz = THREE.MathUtils.clamp(this.hitPoint.z, -4.5, 4.8);
+    const hx = THREE.MathUtils.clamp(this.hitPoint.x, -2.85, 2.85);
+    const hz = THREE.MathUtils.clamp(this.hitPoint.z, -2.35, 2.35);
     this.uniforms.uCursorWorld.value.set(hx, 0.0, hz);
     this.uniforms.uBrushActive.value = 1.0;
 
-    // Stamp persistent watercolor reveal trail when cursor travels >= 0.45 m
+    // Stamp persistent watercolor reveal trail when cursor travels >= 0.40 m
     const distMoved = Math.hypot(hx - this.lastWashStampPos.x, hz - this.lastWashStampPos.y);
-    if (distMoved > 0.45) {
-      this.stampWashTrail(hx, hz, 2.35);
+    if (distMoved > 0.40) {
+      this.stampWashTrail(hx, hz, 1.95);
       this.lastWashStampPos.set(hx, hz);
     }
 
-    // If sweeping over the foreground pond (z > 0.15), spawn gentle capillary ripples
+    // If sweeping over the foreground pond, spawn gentle capillary ripples
     const now = this.uniforms.uTime.value;
-    if (hz > 0.15 && now - this.lastRippleTime > 0.22 && distMoved > 0.18) {
-      this.spawnPondRipple(hx, hz, 0.55);
+    if (hz > 0.20 && hz < 2.25 && Math.abs(hx) < 2.35 && now - this.lastRippleTime > 0.22 && distMoved > 0.18) {
+      this.spawnPondRipple(hx, hz, 0.52);
       this.lastRippleTime = now;
     }
   };
 
   private handlePointerDown = (ev: PointerEvent): void => {
     if (!this.updateRayFromEvent(ev)) return;
-    const hx = THREE.MathUtils.clamp(this.hitPoint.x, -5.0, 5.0);
-    const hz = THREE.MathUtils.clamp(this.hitPoint.z, -4.5, 4.8);
+    const hx = THREE.MathUtils.clamp(this.hitPoint.x, -2.85, 2.85);
+    const hz = THREE.MathUtils.clamp(this.hitPoint.z, -2.35, 2.35);
 
-    this.stampWashTrail(hx, hz, 2.75);
-    if (hz > -0.1) {
-      this.spawnPondRipple(hx, Math.max(0.25, hz), 0.95);
+    this.stampWashTrail(hx, hz, 2.25);
+    if (hz > -0.05 && hz < 2.35 && Math.abs(hx) < 2.45) {
+      this.spawnPondRipple(hx, Math.max(0.32, hz), 0.92);
     }
   };
 
@@ -224,7 +215,7 @@ export class PaperWorldEngine {
     this.uniforms.uBrushActive.value = 0.0;
   };
 
-  public stampWashTrail(x: number, z: number, radius = 2.4): void {
+  public stampWashTrail(x: number, z: number, radius = 2.0): void {
     const slots = [
       this.uniforms.uWashTrail0,
       this.uniforms.uWashTrail1,
@@ -337,10 +328,10 @@ export class PaperWorldEngine {
       this.guardianReflected.scale.set(1.0, breathScaleY, 1.0);
     }
 
-    // Periodic ambient pond droplet every ~4.5 seconds so the reflection stays alive
+    // Periodic ambient pond droplet every ~4.5 seconds inside the central reflection pool
     if (elapsed - this.lastRippleTime > 4.2) {
-      const side = (Math.floor(elapsed) % 2 === 0) ? -1 : 1;
-      this.spawnPondRipple(side * 1.15, 0.65 + (elapsed % 1.2), 0.48);
+      const side = Math.floor(elapsed) % 2 === 0 ? -1 : 1;
+      this.spawnPondRipple(side * 0.95, 0.72 + (elapsed % 0.95), 0.46);
       this.lastRippleTime = elapsed;
     }
 
