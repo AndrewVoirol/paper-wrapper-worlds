@@ -357,7 +357,7 @@ body,
   inset: -44px -72px -44px -38px;
   background: radial-gradient(
     closest-side,
-    rgba(242, 235, 217, 0.94) 52%,
+    rgba(242, 235, 217, 0.80) 50%,
     rgba(242, 235, 217, 0) 100%
   );
   pointer-events: none;

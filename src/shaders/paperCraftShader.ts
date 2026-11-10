@@ -25,6 +25,7 @@ import {
   cameraPosition,
   attribute,
   varying,
+  viewportUV,
 } from 'three/tsl';
 import { DEFAULT_PARAMS, PALETTE_PRESETS, type PaperPalettePreset } from '../types';
 
@@ -37,6 +38,7 @@ export const WATER_LEVEL_Y = 0.008;
  */
 export class PaperSceneUniforms {
   public readonly uTime = uniform(0.0);
+  public readonly uSheetAspect = uniform(1.6);
   public readonly uPaperTooth = uniform(DEFAULT_PARAMS.paperTooth);
   public readonly uWatercolorBleed = uniform(DEFAULT_PARAMS.watercolorBleed);
   public readonly uPondRippleStrength = uniform(DEFAULT_PARAMS.pondRippleStrength);
@@ -149,24 +151,78 @@ export const fbmPaper2D = Fn(([p_in]: [any]) => {
 });
 
 /**
- * Shared asymmetric shoreline curve `z = shoreZ(x)` matching `IMG_0382.DNG`:
- * - Nearly horizontal behind the crouching guardian (`z ≈ 0.20..0.28`),
- * - Curving forward on the right flank (`x > 1.45 -> 4.35`) into the stone cairn & trailhead cove.
+ * Evaluates the continuous physical cold-press Washi / cotton-rag sheet backing (`sRGB [0..1]`)
+ * across `viewportUV` so the unpainted left typography folio, outer neatline margins, and
+ * translucent Kubelka-Munk glazes share one seamless, tactile handmade paper surface (`0.000` seam).
+ */
+export const evaluateWashiPaperSheetSrgb = Fn(([uniforms]: [PaperSceneUniforms]) => {
+  const uv = viewportUV;
+  const p = vec2(uv.x.mul(uniforms.uSheetAspect), uv.y);
+
+  // Fast 4-sample handmade cold-press Washi grain + sinuous kozo fibers + bark specks (`0.000` seam)
+  const toothBroad = noise2D(p.mul(14.5).add(vec2(1.7, 3.1))).sub(0.5);
+  const pRot = vec2(
+    p.x.mul(0.80).sub(p.y.mul(0.60)),
+    p.x.mul(0.60).add(p.y.mul(0.80))
+  );
+  const toothFine = noise2D(pRot.mul(52.0).add(vec2(8.4, 2.9))).sub(0.5);
+  const fiberCoord = vec2(
+    p.x.mul(82.0).add(toothBroad.mul(2.4)),
+    p.y.mul(22.0).sub(toothBroad.mul(1.8))
+  );
+  const kozoLift = smoothstep(float(0.64), float(0.89), noise2D(fiberCoord)).mul(0.012);
+  const barkFleck = smoothstep(float(0.87), float(0.96), noise2D(p.mul(132.0).add(vec2(11.3, 5.7)))).mul(0.020);
+
+  const deskRaking = float(0.5).sub(uv.x.mul(0.52).add(uv.y.mul(0.48))).mul(0.018);
+  const grainDelta = toothBroad
+    .mul(0.016)
+    .add(toothFine.mul(0.011))
+    .mul(uniforms.uPaperTooth.mul(0.55).add(0.45));
+
+  const base = vec3(uniforms.uPaperBacking)
+    .add(vec3(deskRaking.add(grainDelta).add(kozoLift)))
+    .sub(vec3(0.018, 0.024, 0.032).mul(barkFleck));
+
+  return clamp(base, vec3(0.05), vec3(0.99));
+});
+
+/**
+ * Full-viewport linear TSL `scene.backgroundNode` matching `evaluateWashiPaperSheetSrgb`.
+ */
+export function createWashiBackdropNode(uniforms: PaperSceneUniforms): any {
+  return Fn(() => srgbToLinearVec3(evaluateWashiPaperSheetSrgb(uniforms)))();
+}
+
+/**
+ * Shared irregular multi-scale shoreline curve `z = shoreZ(x)` matching the Bernheim Forest photos:
+ * - Stepped root coves, stone pockets, and organic bank indentations behind Little Nis (`z ≈ 0.16..0.31`),
+ * - Curving forward on the right flank (`x > 1.42 -> 4.35`) into the stone cluster & trailhead cove.
  */
 export function evalShorelineZJS(x: number): number {
   const rightT = Math.max(0, Math.min(1, (x - 1.42) / (4.35 - 1.42)));
   const rightCove = rightT * rightT * (3 - 2 * rightT) * 1.18;
   const leftT = Math.max(0, Math.min(1, (-x - 1.85) / (4.35 - 1.85)));
-  const leftCove = leftT * leftT * (3 - 2 * leftT) * 0.22;
-  return 0.19 + Math.cos(x * 0.88) * 0.085 + rightCove + leftCove;
+  const leftCove = leftT * leftT * (3 - 2 * leftT) * 0.24;
+  return (
+    0.185 +
+    Math.cos(x * 0.88) * 0.082 +
+    Math.cos(x * 2.35 + 0.7) * 0.035 +
+    Math.sin(x * 5.15 - 1.1) * 0.018 +
+    Math.cos(x * 9.3 + 2.2) * 0.009 +
+    rightCove +
+    leftCove
+  );
 }
 
 export const evaluateShorelineZ = Fn(([x_in]: [any]) => {
   const x = float(x_in);
   const rightCove = smoothstep(float(1.42), float(4.35), x).mul(1.18);
-  const leftCove = smoothstep(float(1.85), float(4.35), x.negate()).mul(0.22);
-  return float(0.19)
-    .add(cos(x.mul(0.88)).mul(0.085))
+  const leftCove = smoothstep(float(1.85), float(4.35), x.negate()).mul(0.24);
+  return float(0.185)
+    .add(cos(x.mul(0.88)).mul(0.082))
+    .add(cos(x.mul(2.35).add(0.7)).mul(0.035))
+    .add(sin(x.mul(5.15).sub(1.1)).mul(0.018))
+    .add(cos(x.mul(9.3).add(2.2)).mul(0.009))
     .add(rightCove)
     .add(leftCove);
 });
@@ -297,10 +353,10 @@ export const evaluateDioramaWashReveal = Fn(([worldPos_in, uniforms]: [any, Pape
  */
 export const evaluateCanopyCrownEnvelope = Fn(([worldPos_in, uniforms]: [any, PaperSceneUniforms]) => {
   const wp = vec3(worldPos_in);
-  const fbmCrown = fbmPaper2D(vec2(wp.x.mul(1.15), wp.y.mul(1.05).add(wp.z.mul(0.8)))).sub(0.5).mul(0.38);
-  const archDrop = wp.x.div(4.65).mul(wp.x.div(4.65)).mul(0.62);
+  const fbmCrown = fbmPaper2D(vec2(wp.x.mul(1.15), wp.y.mul(1.05).add(wp.z.mul(0.8)))).sub(0.5).mul(0.46);
+  const archDrop = wp.x.div(4.85).mul(wp.x.div(4.85)).mul(0.44);
   const effectiveY = wp.y.add(archDrop).add(fbmCrown.mul(uniforms.uWatercolorBleed.mul(0.55).add(0.35)));
-  return float(1.0).sub(smoothstep(float(2.68), float(3.42), effectiveY));
+  return float(1.0).sub(smoothstep(float(3.35), float(4.25), effectiveY));
 });
 
 /**
@@ -578,24 +634,65 @@ export function createFoldedPaperLimbGeometry(): THREE.BufferGeometry {
     }
   };
 
-  // Primary upward-sweeping limb
-  appendBranchTube(
-    (t) => new THREE.Vector3(t * 0.38 + t * t * 0.28, t * 1.12 - t * t * 0.08, t * 0.12),
-    0.082,
-    0.022,
-    8
-  );
-  // Secondary forked twig emerging mid-limb
+  // 1. Primary crooked upward-sweeping Kentucky hardwood bough
   appendBranchTube(
     (t) =>
       new THREE.Vector3(
-        0.24 + t * 0.14 - t * t * 0.18,
-        0.52 + t * 0.68,
-        0.06 - t * 0.22
+        t * 0.42 + t * t * 0.34,
+        t * 1.18 - t * t * 0.06,
+        t * 0.14 - Math.sin(t * Math.PI) * 0.06
       ),
-    0.048,
-    0.015,
-    5
+    0.070,
+    0.014,
+    8
+  );
+  // 2. High ascending inner winter fork (creates vertical/diagonal twig web against sky & pond)
+  appendBranchTube(
+    (t) =>
+      new THREE.Vector3(
+        0.18 + t * 0.12 - t * t * 0.22,
+        0.44 + t * 0.86,
+        0.05 - t * 0.20
+      ),
+    0.044,
+    0.010,
+    6
+  );
+  // 3. Wide lateral winter limb fork reaching across clearing gaps
+  appendBranchTube(
+    (t) =>
+      new THREE.Vector3(
+        0.34 + t * 0.56 + t * t * 0.18,
+        0.64 + t * 0.42 - t * t * 0.10,
+        0.08 + t * 0.26
+      ),
+    0.038,
+    0.009,
+    6
+  );
+  // 4. Fine upper-crown twig fork A
+  appendBranchTube(
+    (t) =>
+      new THREE.Vector3(
+        0.14 - t * 0.24,
+        0.88 + t * 0.48,
+        -0.06 + t * 0.18
+      ),
+    0.022,
+    0.006,
+    4
+  );
+  // 5. Fine outer twig shoot B
+  appendBranchTube(
+    (t) =>
+      new THREE.Vector3(
+        0.62 + t * 0.36,
+        0.86 + t * 0.38,
+        0.20 - t * 0.16
+      ),
+    0.020,
+    0.006,
+    4
   );
 
   const geom = new THREE.BufferGeometry();
@@ -606,11 +703,9 @@ export function createFoldedPaperLimbGeometry(): THREE.BufferGeometry {
 }
 
 /**
- * Builds a 3D Compressed Accordion-Pleated Origami Bough Shell Geometry (`~1m` span).
- * - Sheet deformation creates true 3D botanical volume: 7 radial mountain/valley accordion pleats
- *   (`14` crisp planar dihedral facets) arched across 3 radial stations into a cupped bough fan,
- *   plus a smaller tucked upper overlap fan (`crown tuck`)!
- * - Zero horizontal flat pancake discs and zero blurry alpha halos: crisp zig-zag cut paper facets.
+ * Builds an Asymmetric, Ragged Folded-Paper Autumn Oak & Woodland Bramble Cluster (`~0.85m` span).
+ * - Replaces uniform drooping umbrella domes with 9 crisp V-folded & diamond-creased cut-paper
+ *   autumn leaf sprays pitched and rolled at varied organic angles with open sky gaps between leaves.
  */
 export function createFoldedPaperLeafGeometry(): THREE.BufferGeometry {
   const positions: number[] = [];
@@ -635,9 +730,8 @@ export function createFoldedPaperLeafGeometry(): THREE.BufferGeometry {
     pushTri(x0, y0, z0, u0, v0, x2, y2, z2, u2, v2, x3, y3, z3, u3, v3);
   };
 
-  // Builds a single compressed dihedral-creased origami bough spray (`8` crisp facets:
-  // tucked stem collar -> cambered central mountain ridge -> flared lateral facets -> angular cut tip)
-  const appendDihedralSpray = (opts: {
+  // Builds a crisp V-creased lobed oak/beech paper leaf blade (zero umbrella droop)
+  const appendFoldedOakLeaf = (opts: {
     ox: number;
     oy: number;
     oz: number;
@@ -646,8 +740,8 @@ export function createFoldedPaperLeafGeometry(): THREE.BufferGeometry {
     roll: number;
     len: number;
     halfWidth: number;
-    ridgeH: number;
-    camberY: number;
+    foldDepth: number;
+    curlY: number;
     isUpperTuck: boolean;
   }) => {
     const q = new THREE.Quaternion().setFromEuler(
@@ -660,96 +754,98 @@ export function createFoldedPaperLeafGeometry(): THREE.BufferGeometry {
 
     const L = opts.len;
     const W = opts.halfWidth;
-    const R = opts.ridgeH;
-    const C = opts.camberY;
-    const cvBase = opts.isUpperTuck ? 0.24 : 0.42;
+    const F = opts.foldDepth;
+    const C = opts.curlY;
+    const cvBase = opts.isUpperTuck ? 0.20 : 0.38;
 
-    const s0L = xf(-W * 0.34, -R * 0.25, 0.0);
-    const s0M = xf(0.0, R * 0.42, 0.02);
-    const s0R = xf(W * 0.34, -R * 0.25, 0.0);
+    const s0L = xf(-W * 0.24, F * 0.20, 0.0);
+    const s0M = xf(0.0, -F * 0.30, 0.02);
+    const s0R = xf(W * 0.24, F * 0.20, 0.0);
 
-    const s1L = xf(-W * 1.0, C - R * 0.85, L * 0.46);
-    const s1M = xf(0.0, C + R * 1.05, L * 0.48);
-    const s1R = xf(W * 0.94, C - R * 0.82, L * 0.44);
+    // Asymmetric oak lobe flare at mid-blade
+    const s1L = xf(-W * 1.05, C + F * 0.88, L * 0.42);
+    const s1M = xf(0.0, C - F * 0.65, L * 0.45);
+    const s1R = xf(W * 0.92, C + F * 0.82, L * 0.39);
 
-    const s2L = xf(-W * 0.62, C * 0.35 - R * 0.65, L * 0.82);
-    const s2M = xf(0.0, C * 0.42 + R * 0.72, L * 0.85);
-    const s2R = xf(W * 0.58, C * 0.35 - R * 0.62, L * 0.80);
+    // Secondary notched distal lobe
+    const s2L = xf(-W * 0.68, C * 0.70 + F * 0.64, L * 0.78);
+    const s2M = xf(0.0, C * 0.62 - F * 0.42, L * 0.82);
+    const s2R = xf(W * 0.60, C * 0.70 + F * 0.58, L * 0.75);
 
-    const tip = xf(W * 0.04, -C * 0.32, L);
+    const tip = xf(W * 0.06, C * 0.35 + F * 0.15, L);
 
-    // Proximal dihedral pair
     pushQuad(
-      s1L[0], s1L[1], s1L[2], -0.44, 0.04,
-      s1M[0], s1M[1], s1M[2], 0.0, 0.04,
+      s1L[0], s1L[1], s1L[2], -0.45, 0.05,
+      s1M[0], s1M[1], s1M[2], 0.0, 0.05,
       s0M[0], s0M[1], s0M[2], 0.0, cvBase,
-      s0L[0], s0L[1], s0L[2], -0.38, cvBase
+      s0L[0], s0L[1], s0L[2], -0.36, cvBase
     );
     pushQuad(
-      s1M[0], s1M[1], s1M[2], 0.0, 0.04,
-      s1R[0], s1R[1], s1R[2], 0.44, 0.04,
-      s0R[0], s0R[1], s0R[2], 0.38, cvBase,
+      s1M[0], s1M[1], s1M[2], 0.0, 0.05,
+      s1R[0], s1R[1], s1R[2], 0.45, 0.05,
+      s0R[0], s0R[1], s0R[2], 0.36, cvBase,
       s0M[0], s0M[1], s0M[2], 0.0, cvBase
     );
-
-    // Mid-distal dihedral pair (angled facet break -> `sheet deformation makes volume`)
     pushQuad(
-      s2L[0], s2L[1], s2L[2], -0.45, -0.30,
-      s2M[0], s2M[1], s2M[2], 0.0, -0.30,
-      s1M[0], s1M[1], s1M[2], 0.0, 0.04,
-      s1L[0], s1L[1], s1L[2], -0.44, 0.04
+      s2L[0], s2L[1], s2L[2], -0.46, -0.28,
+      s2M[0], s2M[1], s2M[2], 0.0, -0.28,
+      s1M[0], s1M[1], s1M[2], 0.0, 0.05,
+      s1L[0], s1L[1], s1L[2], -0.45, 0.05
     );
     pushQuad(
-      s2M[0], s2M[1], s2M[2], 0.0, -0.30,
-      s2R[0], s2R[1], s2R[2], 0.45, -0.30,
-      s1R[0], s1R[1], s1R[2], 0.44, 0.04,
-      s1M[0], s1M[1], s1M[2], 0.0, 0.04
-    );
-
-    // Crisp angular origami cut tip facets
-    pushTri(
-      s2L[0], s2L[1], s2L[2], -0.45, -0.30,
-      tip[0], tip[1], tip[2], 0.0, -0.49,
-      s2M[0], s2M[1], s2M[2], 0.0, -0.30
+      s2M[0], s2M[1], s2M[2], 0.0, -0.28,
+      s2R[0], s2R[1], s2R[2], 0.46, -0.28,
+      s1R[0], s1R[1], s1R[2], 0.45, 0.05,
+      s1M[0], s1M[1], s1M[2], 0.0, 0.05
     );
     pushTri(
-      s2M[0], s2M[1], s2M[2], 0.0, -0.30,
+      s2L[0], s2L[1], s2L[2], -0.46, -0.28,
       tip[0], tip[1], tip[2], 0.0, -0.49,
-      s2R[0], s2R[1], s2R[2], 0.45, -0.30
+      s2M[0], s2M[1], s2M[2], 0.0, -0.28
+    );
+    pushTri(
+      s2M[0], s2M[1], s2M[2], 0.0, -0.28,
+      tip[0], tip[1], tip[2], 0.0, -0.49,
+      s2R[0], s2R[1], s2R[2], 0.46, -0.28
     );
   };
 
-  // Asymmetric 7-spray overlapping origami bough cluster (zero radial scallop-umbrella symmetry!)
-  // Lower sweeping bough tier (`4` broad overlapping sprays)
-  appendDihedralSpray({
-    ox: -0.14, oy: 0.01, oz: -0.12, yaw: -0.78, pitch: 0.24, roll: 0.14,
-    len: 0.66, halfWidth: 0.24, ridgeH: 0.058, camberY: 0.045, isUpperTuck: false,
+  // Scattered 9-blade irregular twig-end autumn leaf spray (varied elevations, pitches & rolls!)
+  appendFoldedOakLeaf({
+    ox: -0.24, oy: -0.06, oz: -0.08, yaw: -1.12, pitch: -0.22, roll: 0.38,
+    len: 0.46, halfWidth: 0.16, foldDepth: 0.048, curlY: 0.03, isUpperTuck: false,
   });
-  appendDihedralSpray({
-    ox: -0.04, oy: 0.03, oz: -0.10, yaw: -0.22, pitch: 0.28, roll: -0.06,
-    len: 0.72, halfWidth: 0.26, ridgeH: 0.064, camberY: 0.052, isUpperTuck: false,
+  appendFoldedOakLeaf({
+    ox: -0.11, oy: 0.08, oz: -0.04, yaw: -0.52, pitch: 0.18, roll: -0.28,
+    len: 0.50, halfWidth: 0.17, foldDepth: 0.052, curlY: -0.02, isUpperTuck: true,
   });
-  appendDihedralSpray({
-    ox: 0.06, oy: 0.02, oz: -0.11, yaw: 0.34, pitch: 0.25, roll: 0.08,
-    len: 0.68, halfWidth: 0.25, ridgeH: 0.060, camberY: 0.048, isUpperTuck: false,
+  appendFoldedOakLeaf({
+    ox: 0.03, oy: -0.04, oz: 0.02, yaw: -0.08, pitch: 0.32, roll: 0.16,
+    len: 0.48, halfWidth: 0.16, foldDepth: 0.046, curlY: -0.03, isUpperTuck: false,
   });
-  appendDihedralSpray({
-    ox: 0.16, oy: 0.0, oz: -0.13, yaw: 0.88, pitch: 0.22, roll: -0.15,
-    len: 0.61, halfWidth: 0.22, ridgeH: 0.054, camberY: 0.042, isUpperTuck: false,
+  appendFoldedOakLeaf({
+    ox: 0.18, oy: 0.05, oz: -0.05, yaw: 0.48, pitch: -0.14, roll: -0.34,
+    len: 0.44, halfWidth: 0.15, foldDepth: 0.045, curlY: 0.04, isUpperTuck: true,
   });
-
-  // Upper tucked overlapping bough tier (`3` staggered sprays tucked above the lower joints)
-  appendDihedralSpray({
-    ox: -0.09, oy: 0.11, oz: -0.14, yaw: -0.48, pitch: 0.15, roll: 0.09,
-    len: 0.56, halfWidth: 0.21, ridgeH: 0.052, camberY: 0.044, isUpperTuck: true,
+  appendFoldedOakLeaf({
+    ox: 0.28, oy: -0.08, oz: -0.10, yaw: 1.06, pitch: 0.26, roll: 0.24,
+    len: 0.42, halfWidth: 0.15, foldDepth: 0.044, curlY: -0.02, isUpperTuck: false,
   });
-  appendDihedralSpray({
-    ox: 0.02, oy: 0.13, oz: -0.15, yaw: 0.06, pitch: 0.17, roll: -0.04,
-    len: 0.60, halfWidth: 0.22, ridgeH: 0.056, camberY: 0.048, isUpperTuck: true,
+  appendFoldedOakLeaf({
+    ox: -0.16, oy: 0.19, oz: -0.12, yaw: -0.78, pitch: -0.34, roll: -0.22,
+    len: 0.40, halfWidth: 0.14, foldDepth: 0.042, curlY: 0.05, isUpperTuck: true,
   });
-  appendDihedralSpray({
-    ox: 0.12, oy: 0.10, oz: -0.13, yaw: 0.58, pitch: 0.14, roll: -0.11,
-    len: 0.53, halfWidth: 0.20, ridgeH: 0.050, camberY: 0.040, isUpperTuck: true,
+  appendFoldedOakLeaf({
+    ox: 0.02, oy: 0.22, oz: -0.09, yaw: 0.14, pitch: -0.28, roll: 0.30,
+    len: 0.43, halfWidth: 0.15, foldDepth: 0.046, curlY: 0.04, isUpperTuck: true,
+  });
+  appendFoldedOakLeaf({
+    ox: 0.19, oy: 0.17, oz: -0.14, yaw: 0.84, pitch: -0.18, roll: -0.26,
+    len: 0.38, halfWidth: 0.13, foldDepth: 0.040, curlY: 0.03, isUpperTuck: true,
+  });
+  appendFoldedOakLeaf({
+    ox: -0.04, oy: -0.14, oz: 0.06, yaw: 0.28, pitch: 0.42, roll: -0.18,
+    len: 0.39, halfWidth: 0.14, foldDepth: 0.042, curlY: -0.04, isUpperTuck: false,
   });
 
   const geom = new THREE.BufferGeometry();
@@ -760,8 +856,138 @@ export function createFoldedPaperLeafGeometry(): THREE.BufferGeometry {
 }
 
 /**
+ * Builds a Crooked, Creased Bark-Paper Fallen Log with Pale Cut-Heartwood End-Caps (`length = 1` along Y)
+ * matching the gnarled deadfall timber behind Little Nis's viewer-left arm in the Bernheim photo.
+ * (`cardUV.x >= 0.47` flags the cut cross-section heartwood faces for warm end-grain coloration!)
+ */
+export function createGnarledFallenLogGeometry(): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const cardCoords: number[] = [];
+
+  const pushTri = (
+    ax: number, ay: number, az: number, au: number, av: number,
+    bx: number, by: number, bz: number, bu: number, bv: number,
+    cx: number, cy: number, cz: number, cu: number, cv: number
+  ) => {
+    positions.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+    cardCoords.push(au, av, bu, bv, cu, cv);
+  };
+
+  const numSides = 7;
+  const numStations = 10;
+  const evalRing = (sFrac: number) => {
+    const y = -0.5 + sFrac;
+    const archX = Math.sin(sFrac * Math.PI) * 0.16;
+    const archZ = Math.sin(sFrac * Math.PI * 1.4) * 0.08;
+    const taper = 1.0 - sFrac * 0.22;
+    const pts: Array<{ x: number; y: number; z: number; cu: number; cv: number }> = [];
+    for (let j = 0; j <= numSides; j++) {
+      const a = (j / numSides) * Math.PI * 2 + sFrac * 0.35;
+      const ridge = j % 2 === 0 ? 1.12 : 0.86;
+      const r = taper * ridge;
+      pts.push({
+        x: archX + Math.sin(a) * r,
+        y,
+        z: archZ + Math.cos(a) * r,
+        cu: j % 2 === 0 ? 0.0 : 0.38,
+        cv: -0.40 + sFrac * 0.80,
+      });
+    }
+    return { cx: archX, y, cz: archZ, pts };
+  };
+
+  const rings = [];
+  for (let i = 0; i <= numStations; i++) {
+    rings.push(evalRing(i / numStations));
+  }
+
+  for (let i = 0; i < numStations; i++) {
+    for (let j = 0; j < numSides; j++) {
+      const bL = rings[i].pts[j];
+      const bR = rings[i].pts[j + 1];
+      const tR = rings[i + 1].pts[j + 1];
+      const tL = rings[i + 1].pts[j];
+      pushTri(bL.x, bL.y, bL.z, bL.cu, bL.cv, bR.x, bR.y, bR.z, bR.cu, bR.cv, tR.x, tR.y, tR.z, tR.cu, tR.cv);
+      pushTri(bL.x, bL.y, bL.z, bL.cu, bL.cv, tR.x, tR.y, tR.z, tR.cu, tR.cv, tL.x, tL.y, tL.z, tL.cu, tL.cv);
+    }
+  }
+
+  // Cut/broken pale wood heartwood end-caps (`cu = 0.49` signals end-grain in shader!)
+  const bot = rings[0];
+  const top = rings[numStations];
+  for (let j = 0; j < numSides; j++) {
+    const b0 = bot.pts[j];
+    const b1 = bot.pts[j + 1];
+    pushTri(bot.cx, bot.y, bot.cz, 0.495, 0.0, b1.x, b1.y, b1.z, 0.485, 0.25, b0.x, b0.y, b0.z, 0.485, -0.25);
+
+    const t0 = top.pts[j];
+    const t1 = top.pts[j + 1];
+    pushTri(top.cx, top.y, top.cz, 0.495, 0.0, t0.x, t0.y, t0.z, 0.485, -0.25, t1.x, t1.y, t1.z, 0.485, 0.25);
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geom.setAttribute('aCardCoord', new THREE.Float32BufferAttribute(cardCoords, 2));
+  geom.computeVertexNormals();
+  return geom;
+}
+
+/**
+ * Builds a Crisp Folded Rectangular Paper Trailhead Placard (`width = 1`, `height = 1`)
+ * matching the small two-post Bernheim Arboretum trail sign on the right bank in the wide photo.
+ */
+export function createFoldedTrailSignGeometry(): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const cardCoords: number[] = [];
+
+  const pushQuad = (
+    x0: number, y0: number, z0: number, u0: number, v0: number,
+    x1: number, y1: number, z1: number, u1: number, v1: number,
+    x2: number, y2: number, z2: number, u2: number, v2: number,
+    x3: number, y3: number, z3: number, u3: number, v3: number
+  ) => {
+    positions.push(
+      x0, y0, z0, x1, y1, z1, x2, y2, z2,
+      x0, y0, z0, x2, y2, z2, x3, y3, z3
+    );
+    cardCoords.push(
+      u0, v0, u1, v1, u2, v2,
+      u0, v0, u2, v2, u3, v3
+    );
+  };
+
+  // Front slightly tilted rectangular paper plaque + crisp folded top weather hood lip
+  pushQuad(
+    -0.5, -0.45, 0.04, -0.46, -0.46,
+    0.5, -0.45, 0.04, 0.46, -0.46,
+    0.5, 0.42, -0.02, 0.46, 0.38,
+    -0.5, 0.42, -0.02, -0.46, 0.38
+  );
+  // Top folded weather overhang lip
+  pushQuad(
+    -0.52, 0.42, -0.02, -0.48, 0.0,
+    0.52, 0.42, -0.02, 0.48, 0.0,
+    0.52, 0.50, 0.08, 0.48, -0.48,
+    -0.52, 0.50, 0.08, -0.48, -0.48
+  );
+  // Thin cardstock side & back board thickness
+  pushQuad(
+    0.5, 0.42, -0.06, 0.46, 0.38,
+    -0.5, 0.42, -0.06, -0.46, 0.38,
+    -0.5, -0.45, 0.0, -0.46, -0.46,
+    0.5, -0.45, 0.0, 0.46, -0.46
+  );
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geom.setAttribute('aCardCoord', new THREE.Float32BufferAttribute(cardCoords, 2));
+  geom.computeVertexNormals();
+  return geom;
+}
+
+/**
  * Builds a Miniature 2-Facet V-Folded Origami Floating Leaf (`4` crisp triangles)
- * for the calm autumn leaves resting on the pond surface (`below fingertip scale`).
+ * for the calm autumn leaves resting on the pond surface & mossy bank (`below fingertip scale`).
  */
 export function createOrigamiFloatingLeafGeometry(): THREE.BufferGeometry {
   const positions = [
@@ -790,12 +1016,16 @@ export type PaperMaterialRole =
   | 'sculpted-shell'
   | 'foliage'
   | 'trunk'
+  | 'log'
+  | 'placard'
   | 'bank'
   | 'stone'
   | 'reflected-shingle'
   | 'reflected-shell'
   | 'reflected-foliage'
   | 'reflected-trunk'
+  | 'reflected-log'
+  | 'reflected-placard'
   | 'reflected-stone';
 
 /**
@@ -817,18 +1047,22 @@ export function createPaperShingleMaterial(
     options.role === 'reflected-shell' ||
     options.role === 'reflected-foliage' ||
     options.role === 'reflected-trunk' ||
+    options.role === 'reflected-log' ||
+    options.role === 'reflected-placard' ||
     options.role === 'reflected-stone';
   const isShingle = options.role === 'shingle' || options.role === 'reflected-shingle';
   const isSculptedShell = options.role === 'sculpted-shell' || options.role === 'reflected-shell';
   const isGuardian = isShingle || isSculptedShell;
   const isFoliage = options.role === 'foliage' || options.role === 'reflected-foliage';
-  const isTrunk = options.role === 'trunk' || options.role === 'reflected-trunk';
+  const isLog = options.role === 'log' || options.role === 'reflected-log';
+  const isTrunk = options.role === 'trunk' || options.role === 'reflected-trunk' || isLog;
+  const isPlacard = options.role === 'placard' || options.role === 'reflected-placard';
   const isBank = options.role === 'bank';
   const isStone = options.role === 'stone' || options.role === 'reflected-stone';
-  const hasCardAttr = isGuardian || isFoliage || isTrunk;
+  const hasCardAttr = isGuardian || isFoliage || isTrunk || isPlacard;
 
   // DoubleSide ensures planar-mirrored (`det = -1`) and open-pleated bough fans never cull valid paper facets
-  mat.side = isFoliage || isReflected || isSculptedShell ? THREE.DoubleSide : THREE.FrontSide;
+  mat.side = isFoliage || isReflected || isSculptedShell || isPlacard ? THREE.DoubleSide : THREE.FrontSide;
   mat.transparent = false;
   mat.depthWrite = true;
   mat.alphaTest = 0.5;
@@ -1015,207 +1249,300 @@ export function createPaperShingleMaterial(
       .add(fiberCurl.sub(0.5).mul(0.16).mul(uniforms.uPaperTooth))
       .add(sujimeFlow);
 
-    // 3. Origami Crease Ridges, Valley Pigment Pools & Deckle/Cut-Edge Paper Thinning
+    // 3. Origami Crease Ridges, Valley Pigment Pools, Crisp Course Shadows & Deckle/Cut-Edge Thinning
+    const washiSheetSrgb = evaluateWashiPaperSheetSrgb(uniforms);
+
     const mountainCreaseMask = hasCardAttr
-      ? exp(abs(cardUV.x).mul(-16.0)).mul(isSculptedShell ? 0.58 : 0.88)
+      ? exp(abs(cardUV.x).mul(-17.5)).mul(isSculptedShell ? 0.62 : 0.92)
       : float(0.0);
 
     const valleyTroughPool = hasCardAttr
-      ? smoothstep(float(0.18), float(0.46), abs(cardUV.x)).mul(isFoliage ? 0.28 : 0.18)
+      ? smoothstep(float(0.16), float(0.46), abs(cardUV.x)).mul(isFoliage ? 0.30 : 0.22)
+      : float(0.0);
+
+    // Stronger tucked overlap & bottom-return course shadows so individual shingles read crisply at all distances!
+    const sideSeamShadow = isShingle || isSculptedShell
+      ? smoothstep(float(0.36), float(0.495), abs(cardUV.x)).mul(isShingle ? 0.22 : 0.16)
       : float(0.0);
 
     const tuckedUnderlapShadow = isShingle
-      ? smoothstep(float(0.16), float(0.46), cardUV.y).mul(0.24).mul(uniforms.uShingleRoughness)
+      ? smoothstep(float(0.08), float(0.45), cardUV.y)
+          .mul(0.42)
+          .add(sideSeamShadow)
+          .mul(uniforms.uShingleRoughness)
       : isSculptedShell
-        ? smoothstep(float(0.22), float(0.46), cardUV.y).mul(0.18).mul(uniforms.uShingleRoughness)
+        ? smoothstep(float(0.18), float(0.46), cardUV.y)
+            .mul(0.28)
+            .add(sideSeamShadow)
+            .mul(uniforms.uShingleRoughness)
         : isFoliage
-          ? smoothstep(float(0.16), float(0.38), cardUV.y).mul(0.20).mul(uniforms.uShingleRoughness)
+          ? smoothstep(float(0.14), float(0.38), cardUV.y).mul(0.26).mul(uniforms.uShingleRoughness)
           : isTrunk
-            ? smoothstep(float(0.22), float(0.44), cardUV.y).mul(0.18).mul(uniforms.uShingleRoughness)
+            ? smoothstep(float(0.20), float(0.44), cardUV.y).mul(0.24).mul(uniforms.uShingleRoughness)
             : float(0.0);
 
-    // Lower cut/deckle edge & fold ridge where watercolor film thins so warm `#f2ebd9` Washi glows through!
+    // Lower cut/deckle edge & fold ridge where watercolor film thins so raw `#f2ebd9` Washi edge catches light!
     const cutEdgeThinMask = hasCardAttr
       ? float(1.0)
-          .sub(smoothstep(float(-0.50), float(-0.36).add(fiberCurl.sub(0.5).mul(0.09)), cardUV.y))
-          .mul(isSculptedShell ? 0.38 : 0.66)
+          .sub(smoothstep(float(-0.50), float(-0.39).add(fiberCurl.sub(0.5).mul(0.07)), cardUV.y))
+          .mul(isSculptedShell ? 0.42 : 0.68)
       : float(0.0);
 
     // Evaporative *Fuchidori* pigment ring where watercolor washes dry along outer vignette margins!
     const fuchidoriMarginRing = smoothstep(float(0.08), float(0.26), visibilityEnvelope)
       .mul(float(1.0).sub(smoothstep(float(0.26), float(0.54), visibilityEnvelope)))
       .mul(uniforms.uWatercolorBleed)
-      .mul(isGuardian ? 0.38 : 0.74);
+      .mul(isGuardian ? 0.36 : 0.72);
 
     // 4. Hand-Painted Chromatographic Mass-Tones (`baseMassTone`) & Film Thickness (`roleBaseThickness`)
     let baseMassTone: any = vec3(uniforms.uShingleWeather);
     let bankTuckShadow: any = float(0.0);
-    let roleBaseThickness: any = float(0.72);
+    let roleBaseThickness: any = float(0.76);
 
     if (isGuardian) {
-      // Hand-painted watercolor strips & sculpted paper facets:
-      // - Silver-driftwood shingles chromatographically separate between warm ochre-tea wash halos
-      //   and granulating mineral slate-indigo / raw-umber pools!
-      // - Collar pleats separate between glowing golden-ochre and deep burnt-sienna chestnut!
+      // Unified Salvaged-Lumber Palette (matching close-up Bernheim photograph):
+      // - Driftwood ash/silver-taupe planks interleave naturally with raw-sienna / weathered-cedar collar & chest boards,
+      // - Deep under-belly & between-feet recessed shadow cave grounds his crouched weight onto the bank!
       const warmMix = clamp(varAttr.y, float(0.0), float(1.0));
       const shingleVar = clamp(varAttr.x, float(-0.95), float(0.95));
       const plankShift = shingleVar
-        .mul(isSculptedShell ? 0.08 : 0.11)
-        .add(macroWash.sub(0.5).mul(0.07));
+        .mul(isSculptedShell ? 0.085 : 0.125)
+        .add(macroWash.sub(0.5).mul(0.06));
       const deepHollowShadow = clamp(varAttr.x.negate().sub(1.0), float(0.0), float(1.0));
 
-      const silverTeaHalo = vec3(uniforms.uShingleWeather).mul(vec3(1.12, 1.04, 0.88));
-      const silverSlatePool = vec3(uniforms.uShingleWeather).mul(vec3(0.84, 0.88, 0.96));
+      const silverTeaHalo = vec3(uniforms.uShingleWeather).mul(vec3(1.08, 1.03, 0.93));
+      const silverSlatePool = vec3(uniforms.uShingleWeather).mul(vec3(0.76, 0.78, 0.82));
       const handPaintedSilver = mix(silverTeaHalo, silverSlatePool, chromaPoolMix);
 
-      const collarGoldHalo = mix(
-        vec3(uniforms.uCollarWarmCedar).mul(vec3(1.22, 1.12, 0.86)),
-        vec3(uniforms.uPondAmberTannin).mul(1.28),
-        float(0.38)
-      );
-      const collarChestnutPool = vec3(uniforms.uCollarWarmCedar).mul(vec3(0.86, 0.72, 0.64));
-      const handPaintedCollar = mix(collarGoldHalo, collarChestnutPool, chromaPoolMix);
+      const collarCedarHalo = vec3(uniforms.uCollarWarmCedar).mul(vec3(1.10, 1.02, 0.88));
+      const collarChestnutPool = vec3(uniforms.uCollarWarmCedar).mul(vec3(0.76, 0.66, 0.58));
+      const handPaintedCollar = mix(collarCedarHalo, collarChestnutPool, chromaPoolMix);
 
       const dryWash = mix(handPaintedSilver, handPaintedCollar, warmMix).add(vec3(plankShift));
 
       const heightAboveWater = abs(wp.y.sub(WATER_LEVEL_Y));
       const dampShoreWick = float(1.0)
         .sub(smoothstep(float(0.01), float(0.24), heightAboveWater))
-        .mul(smoothstep(float(-0.34), float(0.30), wp.z));
+        .mul(smoothstep(float(-0.36), float(0.32), wp.z));
       const dampTint = mix(
-        vec3(uniforms.uPondAmberTannin),
-        vec3(uniforms.uPondDeepMoss).mul(1.20),
-        float(0.45)
+        vec3(uniforms.uPondAmberTannin).mul(0.92),
+        vec3(uniforms.uPondDeepMoss).mul(1.18),
+        float(0.48)
       );
+
+      // Analytical Under-Belly & Crouching Groin Shadow Cave (between his two chunky feet, `|x| < 0.46, y < 0.30`)
+      const bellyCaveX = float(1.0).sub(smoothstep(float(0.14), float(0.46), abs(wp.x)));
+      const bellyCaveY = float(1.0).sub(smoothstep(float(0.05), float(0.32), heightAboveWater));
+      const bellyCaveZ = smoothstep(float(-0.92), float(-0.62), wp.z).mul(
+        float(1.0).sub(smoothstep(float(-0.26), float(-0.04), wp.z))
+      );
+      const underBellyCaveAO = bellyCaveX.mul(bellyCaveY).mul(bellyCaveZ).mul(0.68);
 
       const dampGuardian = mix(dryWash, dampTint, dampShoreWick.mul(0.48));
-      const withEyeHollow = mix(dampGuardian, vec3(0.14, 0.10, 0.08), deepHollowShadow.mul(0.93));
+      const withCave = mix(dampGuardian, vec3(0.11, 0.09, 0.07), underBellyCaveAO);
+      const withEyeHollow = mix(withCave, vec3(0.10, 0.075, 0.06), deepHollowShadow.mul(0.95));
       baseMassTone = clamp(
         withEyeHollow.mul(float(1.0).sub(tuckedUnderlapShadow)),
-        vec3(0.06),
-        vec3(0.92)
+        vec3(0.05),
+        vec3(0.90)
       );
-      roleBaseThickness = mix(float(0.66), float(1.02), max(warmMix.mul(0.75), deepHollowShadow))
+      roleBaseThickness = mix(float(0.74), float(1.08), max(max(warmMix.mul(0.78), deepHollowShadow), underBellyCaveAO))
         .add(brushLoadRamp.mul(isSculptedShell ? 0.16 : 0.28))
-        .add(shingleVar.mul(-0.10))
+        .add(shingleVar.mul(-0.11))
+        .add(tuckedUnderlapShadow.mul(0.36))
         .add(valleyTroughPool);
     } else if (isFoliage) {
-      // Hand-painted botanical watercolor paper sprays:
-      // Chromatographic separation within EACH folded leaf spray (gamboge/gold wash -> celadon/olive or burnt-sienna pool)!
+      // Late-Autumn Bernheim Forest Foliage Palette (zero spring lime-green!):
+      // - Far-left copper-russet oak crown (`x < -1.45` or `warmAttr > 0.55`): burnt sienna, rust copper & dry ochre,
+      // - Low woodland bank bramble (`elevY < 1.05`): muted dark woodland moss-olive & sage,
+      // - Sparse high clinging autumn leaves: toasted ochre & russet-olive!
       const elevY = abs(wp.y.sub(WATER_LEVEL_Y));
-      const regionalX = wp.x.add(macroWash.sub(0.5).mul(0.85));
-      const leftRussetWash = smoothstep(float(-0.65), float(-2.45), regionalX).mul(
-        smoothstep(float(0.65), float(1.55), elevY)
+      const regionalX = wp.x.add(macroWash.sub(0.5).mul(0.75));
+      const leftCopperZone = smoothstep(float(-0.85), float(-2.35), regionalX).mul(
+        smoothstep(float(0.55), float(1.25), elevY)
       );
-      const rightGoldenWash = smoothstep(float(0.75), float(2.55), regionalX);
+      const lowBrambleZone = float(1.0).sub(smoothstep(float(0.52), float(1.12), elevY));
 
-      const oliveHalo = mix(vec3(uniforms.uCanopyOlive).mul(1.26), vec3(0.68, 0.62, 0.26), float(0.42));
-      const olivePool = mix(vec3(uniforms.uCanopyOlive).mul(0.86), vec3(0.18, 0.34, 0.28), float(0.45));
-      const handPaintedOlive = mix(oliveHalo, olivePool, chromaPoolMix);
+      const mossBrambleHalo = mix(vec3(uniforms.uCanopyOlive).mul(1.08), vec3(0.44, 0.43, 0.23), float(0.36));
+      const mossBramblePool = mix(vec3(uniforms.uCanopyOlive).mul(0.72), vec3(0.15, 0.22, 0.14), float(0.50));
+      const handPaintedBramble = mix(mossBrambleHalo, mossBramblePool, chromaPoolMix);
 
-      const autumnGoldHalo = vec3(0.76, 0.52, 0.22);
-      const autumnSiennaPool = vec3(0.48, 0.23, 0.13);
-      const handPaintedAutumn = mix(autumnGoldHalo, autumnSiennaPool, chromaPoolMix);
+      const copperOakHalo = vec3(0.68, 0.39, 0.19);
+      const copperSiennaPool = vec3(0.41, 0.18, 0.10);
+      const handPaintedCopperOak = mix(copperOakHalo, copperSiennaPool, chromaPoolMix);
 
-      const sunlitOchreWash = mix(
-        vec3(0.74, 0.68, 0.32),
-        vec3(uniforms.uCanopyOlive).mul(1.05),
+      const dryAutumnOchre = mix(
+        vec3(0.64, 0.50, 0.24),
+        vec3(0.38, 0.32, 0.17),
         chromaPoolMix
       );
 
       const warmAttr = clamp(varAttr.y, float(0.0), float(1.0));
-      let zoneColor: any = handPaintedOlive;
-      zoneColor = mix(zoneColor, handPaintedAutumn, max(leftRussetWash.mul(0.84), warmAttr.mul(0.74)));
-      zoneColor = mix(zoneColor, sunlitOchreWash, rightGoldenWash.mul(0.76));
+      let zoneColor: any = mix(dryAutumnOchre, handPaintedBramble, lowBrambleZone.mul(0.86));
+      zoneColor = mix(zoneColor, handPaintedCopperOak, max(leftCopperZone.mul(0.88), warmAttr.mul(0.82)));
 
-      const tierShift = varAttr.x.mul(0.07).add(wetBackrun.sub(0.5).mul(0.08));
+      const tierShift = varAttr.x.mul(0.07).add(wetBackrun.sub(0.5).mul(0.07));
       baseMassTone = clamp(
-        zoneColor.add(vec3(tierShift)).mul(float(1.0).sub(tuckedUnderlapShadow.mul(0.85))),
-        vec3(0.10),
-        vec3(0.92)
+        zoneColor.add(vec3(tierShift)).mul(float(1.0).sub(tuckedUnderlapShadow.mul(0.88))),
+        vec3(0.08),
+        vec3(0.88)
       );
-      roleBaseThickness = float(0.38)
-        .add(brushLoadRamp.mul(0.32))
-        .add(washBloomMod.mul(0.38))
+      roleBaseThickness = float(0.52)
+        .add(brushLoadRamp.mul(0.30))
+        .add(washBloomMod.mul(0.32))
         .add(valleyTroughPool);
+    } else if (isPlacard) {
+      // Weathered Rectangular Bernheim Trailhead Sign Cardstock (`x ≈ 3.06`) with faint horizontal printed text rules!
+      const textLineBand = smoothstep(float(-0.28), float(0.28), cardUV.y).mul(
+        smoothstep(float(0.38), float(0.18), abs(cardUV.x))
+      );
+      const lineWave = sin(cardUV.y.mul(52.0)).mul(0.5).add(0.5);
+      const microRuleInk = smoothstep(float(0.74), float(0.95), lineWave).mul(textLineBand).mul(0.22);
+      const signParchment = mix(vec3(0.79, 0.75, 0.66), vec3(0.58, 0.54, 0.47), chromaPoolMix.mul(0.55));
+      baseMassTone = clamp(signParchment.sub(vec3(microRuleInk)), vec3(0.24), vec3(0.88));
+      roleBaseThickness = float(0.34).add(microRuleInk.mul(0.45)).add(brushLoadRamp.mul(0.16));
     } else if (isTrunk) {
-      // Hand-painted bark-sheet paper cylinders: warm buff-ochre wash separating into cool slate-sepia + mossy base wick!
-      const barkWarmHalo = vec3(uniforms.uLeafLitter).mul(vec3(1.10, 1.02, 0.88));
-      const barkSlatePool = vec3(uniforms.uShingleWeather).mul(vec3(0.64, 0.66, 0.72));
+      // Kentucky Hardwood Bark Cylinders & Left-Bank Gnarled Fallen Logs:
+      // - Pale sycamore/beech ash-grey trunks (`varAttr.x > 0.08`) vs. dark furrowed oak/walnut sepia-slate,
+      // - Pale warm cut-heartwood end-caps (`isLog && cardUV.x >= 0.475`) matching the sawed deadfall log ends!
+      const sycamoreLift = smoothstep(float(0.02), float(0.26), varAttr.x).mul(isLog ? 0.0 : 0.48);
+      const barkWarmHalo = mix(
+        vec3(uniforms.uLeafLitter).mul(vec3(0.96, 0.90, 0.80)),
+        vec3(0.68, 0.66, 0.61),
+        sycamoreLift
+      );
+      const barkSlatePool = mix(
+        vec3(0.28, 0.26, 0.24),
+        vec3(0.46, 0.46, 0.44),
+        sycamoreLift
+      );
       const barkChromatography = mix(barkWarmHalo, barkSlatePool, chromaPoolMix);
 
       const baseMossWick = float(1.0).sub(
-        smoothstep(float(0.06), float(0.68), abs(wp.y.sub(WATER_LEVEL_Y)).add(fiberCurl.sub(0.5).mul(0.16)))
+        smoothstep(float(0.05), float(0.62), abs(wp.y.sub(WATER_LEVEL_Y)).add(fiberCurl.sub(0.5).mul(0.16)))
       );
-      const weatheredBark = mix(
+      let weatheredBark: any = mix(
         barkChromatography,
-        vec3(uniforms.uCanopyOlive).mul(0.88),
-        baseMossWick.mul(0.46)
+        vec3(uniforms.uCanopyOlive).mul(0.78),
+        baseMossWick.mul(isLog ? 0.58 : 0.38)
       );
 
+      if (isLog) {
+        // Dark weathered deadfall bark + crisp pale cut-heartwood end-caps (`cardUV.x >= 0.475`)
+        const endCapMask = smoothstep(float(0.472), float(0.484), cardUV.x);
+        const heartwoodEnd = mix(vec3(0.76, 0.66, 0.50), vec3(0.56, 0.45, 0.32), chromaPoolMix);
+        weatheredBark = mix(weatheredBark.mul(0.74), heartwoodEnd, endCapMask);
+      }
+
       baseMassTone = clamp(
-        weatheredBark.add(vec3(varAttr.x.mul(0.06))).mul(float(1.0).sub(tuckedUnderlapShadow)),
-        vec3(0.12),
-        vec3(0.86)
+        weatheredBark.add(vec3(varAttr.x.mul(0.05))).mul(float(1.0).sub(tuckedUnderlapShadow)),
+        vec3(0.09),
+        vec3(0.85)
       );
-      roleBaseThickness = float(0.48)
+      roleBaseThickness = float(isLog ? 0.72 : 0.58)
         .add(brushLoadRamp.mul(0.26))
-        .add(washBloomMod.mul(0.32))
+        .add(washBloomMod.mul(0.28))
         .add(valleyTroughPool);
     } else if (isBank) {
-      // Hand-painted cove paper sheet: overlapping ochre, burnt-sienna & olive-moss puddles with visible watermark blooms!
+      // Leaf-Litter & Wood-Chip Embankment, Worn Footpath, Dark Wet-Mud Lip & Ground Contact AO:
       const shoreZ = evaluateShorelineZ(wp.x);
       const distBehind = max(shoreZ.sub(wp.z), float(0.0));
       const tuckCoord = distBehind
-        .mul(1.15)
-        .add(wp.x.mul(0.08))
-        .add(macroWash.sub(0.5).mul(0.30));
+        .mul(1.25)
+        .add(wp.x.mul(0.09))
+        .add(macroWash.sub(0.5).mul(0.32));
       const tuckFract = tuckCoord.sub(floor(tuckCoord));
-      bankTuckShadow = smoothstep(float(0.82), float(0.98), tuckFract)
-        .mul(0.12)
+      bankTuckShadow = smoothstep(float(0.80), float(0.98), tuckFract)
+        .mul(0.16)
         .mul(uniforms.uShingleRoughness)
-        .mul(smoothstep(float(0.14), float(0.62), distBehind));
+        .mul(smoothstep(float(0.10), float(0.58), distBehind));
 
-      const ochreHalo = vec3(uniforms.uPondAmberTannin).mul(vec3(1.28, 1.18, 0.92));
-      const siennaPool = vec3(uniforms.uLeafLitter).mul(vec3(0.98, 0.86, 0.78));
-      const siennaOchre = mix(ochreHalo, siennaPool, chromaPoolMix);
+      // Fine leaf-litter / wood-chip collage speckle + overlapping sienna/ochre washes
+      const litterChipNoise = fbmPaper2D(vec2(wp.x.mul(11.5).add(2.3), wp.z.mul(12.5).sub(1.7)));
+      const litterDarkFlake = smoothstep(float(0.62), float(0.86), litterChipNoise).mul(0.26);
+      const litterPaleChip = smoothstep(float(0.72), float(0.92), float(1.0).sub(litterChipNoise)).mul(0.16);
 
-      const mossyPatch = smoothstep(float(0.46), float(0.82), macroWash.mul(0.65).add(sheetPuddle.mul(0.35))).mul(0.42);
-      const leafLitterWash = mix(siennaOchre, vec3(uniforms.uCanopyOlive).mul(1.06), mossyPatch);
+      const ochreHalo = vec3(uniforms.uLeafLitter).mul(vec3(1.16, 1.06, 0.92));
+      const siennaPool = vec3(uniforms.uLeafLitter).mul(vec3(0.76, 0.66, 0.58));
+      let earthWash: any = mix(ochreHalo, siennaPool, chromaPoolMix)
+        .mul(float(1.0).sub(litterDarkFlake))
+        .add(vec3(0.14, 0.12, 0.09).mul(litterPaleChip));
 
-      const distToWater = wp.z.sub(shoreZ).add(kozoFibers.sub(0.5).mul(0.05));
-      const capillaryWetness = smoothstep(float(-0.36), float(0.01), distToWater);
-      const wetShoreColor = mix(
-        vec3(uniforms.uPondAmberTannin).mul(0.84),
-        vec3(uniforms.uPondDeepMoss).mul(1.05),
-        smoothstep(float(-0.14), float(0.01), distToWater)
+      // Worn compacted taupe-buff trail curving in from the right sign (`x > 0.75`, `z` around `-0.18..+0.22`)
+      const trailCenterZ = float(-0.22).add(smoothstep(float(0.8), float(3.4), wp.x).mul(0.36));
+      const trailMask = smoothstep(float(0.55), float(1.45), wp.x).mul(
+        exp(wp.z.sub(trailCenterZ).mul(wp.z.sub(trailCenterZ)).mul(-3.2))
+      );
+      const compactedTrailSoil = mix(vec3(0.56, 0.46, 0.36), vec3(0.43, 0.35, 0.27), chromaPoolMix);
+      earthWash = mix(earthWash, compactedTrailSoil, trailMask.mul(0.58));
+
+      // Rich woodland moss & damp humus around the left fallen logs (`x < -1.1`)
+      const leftHumusZone = smoothstep(float(-0.85), float(-2.15), wp.x);
+      const mossyPatch = smoothstep(float(0.42), float(0.80), macroWash.mul(0.60).add(sheetPuddle.mul(0.40)))
+        .mul(mix(float(0.32), float(0.68), leftHumusZone));
+      const leafLitterWash = mix(earthWash, vec3(uniforms.uCanopyOlive).mul(0.88), mossyPatch);
+
+      // Dark wet-mud & root-undercut shoreline lip right where bank drops into Holly Pond (`distBehind < 0.12`)
+      const distToWater = wp.z.sub(shoreZ).add(kozoFibers.sub(0.5).mul(0.035));
+      const capillaryWetness = smoothstep(float(-0.28), float(0.01), distToWater);
+      const verticalLipShadow = smoothstep(float(0.24), float(0.68), nw.z).mul(
+        smoothstep(float(-0.14), float(0.02), distToWater)
+      );
+      const wetMudLipColor = mix(
+        vec3(0.22, 0.17, 0.12),
+        vec3(0.11, 0.10, 0.07),
+        max(smoothstep(float(-0.08), float(0.01), distToWater), verticalLipShadow)
       );
 
-      baseMassTone = mix(leafLitterWash, wetShoreColor, capillaryWetness.mul(0.84));
-      roleBaseThickness = float(0.38)
-        .add(brushLoadRamp.mul(0.28))
-        .add(washBloomMod.mul(0.46))
-        .add(capillaryWetness.mul(0.28));
+      // Analytical Ground Contact AO under Little Nis's crouched belly/feet, hands, stones & fallen logs!
+      const dBelly = length(vec2(wp.x.mul(1.15), wp.z.add(0.52).mul(1.35)));
+      const dFootL = length(vec2(wp.x.add(0.39), wp.z.add(0.04)));
+      const dFootR = length(vec2(wp.x.sub(0.39), wp.z.add(0.04)));
+      const dHandL = length(vec2(wp.x.add(1.48).mul(0.85), wp.z.sub(0.32)));
+      const dHandR = length(vec2(wp.x.sub(1.26).mul(0.95), wp.z.sub(0.34)));
+      const dSlabC = length(vec2(wp.x.add(0.04).mul(1.3), wp.z.sub(0.14).mul(2.1)));
+      const dLogsL = length(vec2(wp.x.add(1.95).mul(0.75), wp.z.add(0.54).mul(1.25)));
+
+      const guardianGroundAO = max(
+        exp(dBelly.mul(dBelly).mul(-5.2)).mul(0.66),
+        max(
+          max(exp(dFootL.mul(dFootL).mul(-22.0)), exp(dFootR.mul(dFootR).mul(-22.0))).mul(0.52),
+          max(exp(dHandL.mul(dHandL).mul(-11.0)), exp(dHandR.mul(dHandR).mul(-12.0))).mul(0.46)
+        )
+      );
+      const propGroundAO = max(
+        exp(dSlabC.mul(dSlabC).mul(-18.0)).mul(0.42),
+        exp(dLogsL.mul(dLogsL).mul(-4.8)).mul(0.45)
+      );
+      const totalGroundAO = clamp(max(guardianGroundAO, propGroundAO), float(0.0), float(0.72));
+      bankTuckShadow = bankTuckShadow.add(totalGroundAO.mul(0.32));
+
+      const shoreBlended = mix(leafLitterWash, wetMudLipColor, capillaryWetness.mul(0.88));
+      baseMassTone = mix(shoreBlended, vec3(0.10, 0.08, 0.06), totalGroundAO.mul(0.78));
+      roleBaseThickness = float(0.54)
+        .add(brushLoadRamp.mul(0.26))
+        .add(washBloomMod.mul(0.38))
+        .add(capillaryWetness.mul(0.34))
+        .add(totalGroundAO.mul(0.36));
     } else if (isStone) {
-      // Hand-painted folded limestone paper facets: mineral slate-buff wash + ochre-moss puddles + Washi highlights!
-      const stoneBuffHalo = vec3(0.73, 0.66, 0.53);
-      const stoneMineralPool = mix(vec3(0.44, 0.46, 0.42), vec3(uniforms.uCanopyOlive).mul(0.92), brushLoadRamp.mul(0.50));
-      const paintedStone = mix(stoneBuffHalo, stoneMineralPool, chromaPoolMix);
-      baseMassTone = clamp(paintedStone.add(vec3(varAttr.x.mul(0.07))), vec3(0.22), vec3(0.88));
-      roleBaseThickness = float(0.50).add(brushLoadRamp.mul(0.28)).add(washBloomMod.mul(0.26));
+      // Flat Folded Weathered Limestone Slabs: pale warm calcite-buff top face + damp mossy-slate lower rim!
+      const waterProximity = float(1.0).sub(smoothstep(float(0.005), float(0.075), abs(wp.y.sub(WATER_LEVEL_Y))));
+      const stoneBuffHalo = vec3(0.76, 0.72, 0.63);
+      const stoneMineralPool = mix(vec3(0.46, 0.45, 0.41), vec3(0.24, 0.25, 0.18), waterProximity.mul(0.75));
+      const paintedStone = mix(stoneBuffHalo, stoneMineralPool, max(chromaPoolMix.mul(0.72), waterProximity.mul(0.68)));
+      baseMassTone = clamp(paintedStone.add(vec3(varAttr.x.mul(0.06))), vec3(0.18), vec3(0.88));
+      roleBaseThickness = float(0.46).add(brushLoadRamp.mul(0.26)).add(waterProximity.mul(0.28));
     }
 
     // 5. Physical Kubelka-Munk 2-Flux Film Thickness `d`:
-    // Combines *kasure* dry-brush / water-bloom lifts, mountain-ridge & cut-edge paper thinning,
-    // cold-press valley granulation, and evaporative *fuchidori* watermark rings!
     const ridgeAndEdgeThinning = clamp(
       mountainCreaseMask
-        .mul(0.34)
-        .add(cutEdgeThinMask.mul(0.48))
+        .mul(0.30)
+        .add(cutEdgeThinMask.mul(0.44))
         .mul(uniforms.uShingleRoughness)
-        .add(kasurePaperLift.mul(0.62)),
+        .add(kasurePaperLift.mul(isGuardian ? 0.44 : 0.56)),
       float(0.0),
-      float(0.82)
+      float(0.76)
     );
     const rawThickness = roleBaseThickness
       .mul(float(1.0).sub(ridgeAndEdgeThinning))
@@ -1227,40 +1554,42 @@ export function createPaperShingleMaterial(
     const effectiveThickness = max(float(0.0), rawThickness.mul(envelopeFade));
 
     const kmColor = evalKubelkaMunk2Flux(
-      uniforms.uPaperBacking,
+      washiSheetSrgb,
       baseMassTone,
       vec3(1.16, 1.12, 1.08),
       effectiveThickness
     );
 
-    // 6. Paper-Facet Lighting + Golden Sun Clearing Rim
+    // 6. Paper-Facet Lighting, Cut-Cardstock Edge Catchlight & Golden Afternoon Sun Rim
     const ySign = float(isReflected ? -1.0 : 1.0);
-    const keyLightDir = vec3(0.44, float(0.75).mul(ySign), 0.49);
-    const sunClearingDir = vec3(0.58, float(0.46).mul(ySign), -0.66);
+    const keyLightDir = vec3(0.42, float(0.74).mul(ySign), 0.52);
+    const sunClearingDir = vec3(0.60, float(0.44).mul(ySign), -0.66);
 
     const fiberNormalPerturb = vec3(
-      kozoFibers.sub(0.5).mul(0.09).mul(uniforms.uPaperTooth),
+      kozoFibers.sub(0.5).mul(0.10).mul(uniforms.uPaperTooth),
       float(0.0),
-      fiberCurl.sub(0.5).mul(0.09).mul(uniforms.uPaperTooth)
+      fiberCurl.sub(0.5).mul(0.10).mul(uniforms.uPaperTooth)
     );
     const facetNormal = nw.add(fiberNormalPerturb);
     const nDotL = clamp(dot(facetNormal, keyLightDir), float(-1.0), float(1.0));
 
-    const minShade = isFoliage ? float(0.85) : isBank ? float(0.88) : float(0.78);
-    const maxShade = isFoliage ? float(1.07) : isBank ? float(1.03) : float(1.09);
+    const minShade = isFoliage ? float(0.80) : isBank ? float(0.84) : float(0.72);
+    const maxShade = isFoliage ? float(1.07) : isBank ? float(1.04) : float(1.10);
 
-    const rawShade = mix(minShade, maxShade, smoothstep(float(-0.34), float(0.66), nDotL));
+    const rawShade = mix(minShade, maxShade, smoothstep(float(-0.36), float(0.66), nDotL));
     const lightingGate = smoothstep(float(0.04), float(0.42), visibilityEnvelope);
     const paperShade = mix(float(1.0), rawShade.sub(bankTuckShadow), lightingGate);
 
-    const backRim = pow(clamp(dot(facetNormal, sunClearingDir), float(0.0), float(1.0)), float(2.1))
-      .mul(isBank ? 0.025 : 0.09)
+    const backRim = pow(clamp(dot(facetNormal, sunClearingDir), float(0.0), float(1.0)), float(2.2))
+      .mul(isBank ? 0.022 : 0.085)
       .mul(lightingGate);
 
     const obliqueFacetCatch = pow(clamp(float(1.0).sub(abs(nw.y)), float(0.0), float(1.0)), float(2.3))
-      .mul(isBank ? 0.012 : 0.038);
+      .mul(isBank ? 0.012 : 0.042);
+    const cutDeckleCatch = cutEdgeThinMask.mul(isGuardian ? 0.052 : 0.036);
     const ridgeHighlight = mountainCreaseMask
-      .mul(0.055)
+      .mul(0.058)
+      .add(cutDeckleCatch)
       .add(obliqueFacetCatch)
       .mul(uniforms.uShingleRoughness)
       .mul(lightingGate);
@@ -1268,59 +1597,54 @@ export function createPaperShingleMaterial(
     const shadedPaper = clamp(
       kmColor
         .mul(paperShade)
-        .add(vec3(ridgeHighlight))
-        .add(vec3(1.0, 0.90, 0.68).mul(backRim)),
+        .add(vec3(0.98, 0.95, 0.88).mul(ridgeHighlight))
+        .add(vec3(1.0, 0.89, 0.66).mul(backRim)),
       vec3(0.0),
       vec3(1.0)
     );
 
     if (isReflected) {
-      // Crystal-legible Hero Guardian Reflection vs. Soft Watercolor Woodland Reflection (`Photo 1:1`!):
-      // - Reflected Guardian (`isGuardian = true`) retains ~84% of its pale silver-Washi & warm-russet
-      //   shingle clarity under a delicate olive-amber water tint (`d ≈ 0.14..0.22`)!
-      // - Reflected Woodland (`!isGuardian`) dissolves gently into wet olive-tannin & sky watercolor streaks
-      //   so background foliage never muddies or overpowers the figure's reflection!
+      // High-Contrast Bernheim Pond Mirror (`Photo 1:1`!):
+      // - Reflected Guardian (`isGuardian = true`) preserves pale weathered-wood & warm-cedar shingle clarity
+      //   glazed beneath a translucent olive-tannin water film (`d ≈ 0.13..0.24`),
+      // - Reflected Trunks, Bare Winter Branches & Copper Oak (`!isGuardian`) render as deep dark olive-umber
+      //   & bronze-moss silhouettes (zero milky-beige washout!) cutting starkly across bright sky reflection gaps!
       const depthBelow = clamp(float(WATER_LEVEL_Y).sub(wp.y), float(0.0), float(4.5));
-      const washDiff = wetBackrun.sub(0.5).mul(0.18).mul(uniforms.uWatercolorBleed);
+      const washDiff = wetBackrun.sub(0.5).mul(0.16).mul(uniforms.uWatercolorBleed);
 
       if (isGuardian) {
         const guardianWaterGlaze = evalKubelkaMunk2Flux(
-          shadedPaper.mul(vec3(0.95, 0.96, 0.89)),
-          mix(vec3(uniforms.uPondAmberTannin), vec3(uniforms.uPondDeepMoss), float(0.38)),
-          vec3(1.10, 1.14, 1.02),
-          max(float(0.05), float(0.11).add(depthBelow.mul(0.045)).add(washDiff.mul(0.42)))
+          shadedPaper.mul(vec3(0.94, 0.95, 0.86)),
+          mix(vec3(uniforms.uPondAmberTannin), vec3(uniforms.uPondDeepMoss), float(0.45)),
+          vec3(1.10, 1.14, 1.00),
+          max(float(0.06), float(0.13).add(depthBelow.mul(0.055)).add(washDiff.mul(0.36)))
         );
         const outerPondFade = smoothstep(float(0.04), float(0.48), visibilityEnvelope);
-        const finalGuardRefl = mix(vec3(uniforms.uPaperBacking), guardianWaterGlaze, outerPondFade);
+        const finalGuardRefl = mix(washiSheetSrgb, guardianWaterGlaze, outerPondFade);
         return srgbToLinearVec3(finalGuardRefl);
       }
 
-      const treeGlazeDepth = float(0.30).add(depthBelow.mul(0.10)).add(washDiff);
+      const darkOliveMass = mix(
+        vec3(uniforms.uPondDeepMoss).mul(1.06),
+        vec3(uniforms.uPondAmberTannin).mul(0.88),
+        float(0.36)
+      );
+      const treeGlazeDepth = float(0.32).add(depthBelow.mul(0.11)).add(washDiff);
       const oliveTreeReflect = evalKubelkaMunk2Flux(
-        shadedPaper.mul(vec3(0.92, 0.94, 0.85)),
-        mix(vec3(uniforms.uPondDeepMoss), vec3(uniforms.uPondAmberTannin), float(0.42)),
-        vec3(1.08, 1.14, 0.98),
-        max(float(0.10), treeGlazeDepth)
+        shadedPaper.mul(vec3(0.84, 0.87, 0.74)),
+        darkOliveMass,
+        vec3(1.10, 1.16, 0.98),
+        max(float(0.14), treeGlazeDepth)
       );
 
-      // Dissolve reflected woodland softly into wet watercolor pond wash (`0.35 -> 2.35m`) so trees read as dreamy watercolor wash!
-      const deepWashDissolve = smoothstep(float(0.35), float(2.35), depthBelow.add(washDiff.mul(1.8)));
-      const ambientPondWash = evalKubelkaMunk2Flux(
-        uniforms.uPaperBacking,
-        mix(vec3(uniforms.uPondAmberTannin), vec3(uniforms.uSkyHorizon), float(0.46)),
-        vec3(1.12, 1.14, 1.08),
-        float(0.34)
-      );
-
-      const waterMirrorTone = mix(oliveTreeReflect, ambientPondWash, deepWashDissolve.mul(0.74));
-      // Fade reflected trees well inside the pond's outer watercolor puddle margin (`0.20 -> 0.70`) so zero jagged teeth appear!
-      const outerTreeFade = smoothstep(float(0.20), float(0.70), visibilityEnvelope);
-      const finalReflSrgb = mix(vec3(uniforms.uPaperBacking), waterMirrorTone, outerTreeFade);
+      // Soften only right at the very outer watercolor puddle feather (`0.14 -> 0.58`) onto Washi!
+      const outerTreeFade = smoothstep(float(0.14), float(0.58), visibilityEnvelope);
+      const finalReflSrgb = mix(washiSheetSrgb, oliveTreeReflect, outerTreeFade);
       return srgbToLinearVec3(finalReflSrgb);
     }
 
     const finalFade = smoothstep(float(0.01), float(0.46), visibilityEnvelope);
-    const finalSrgb = mix(vec3(uniforms.uPaperBacking), shadedPaper, finalFade);
+    const finalSrgb = mix(washiSheetSrgb, shadedPaper, finalFade);
     return srgbToLinearVec3(finalSrgb);
   })();
 

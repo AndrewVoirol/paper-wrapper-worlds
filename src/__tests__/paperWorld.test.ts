@@ -10,6 +10,8 @@ import {
   createSculptedPaperTrunkGeometry,
   createFoldedPaperLimbGeometry,
   createFoldedPaperLeafGeometry,
+  createGnarledFallenLogGeometry,
+  createFoldedTrailSignGeometry,
   createOrigamiFloatingLeafGeometry,
 } from '../shaders/paperCraftShader';
 import { CAMERA_PRESETS, PALETTE_PRESETS, DEFAULT_PARAMS, STORY_PLATES } from '../types';
@@ -82,6 +84,8 @@ describe('Paper-Wrapper Worlds — Guardian Sculpture & Optical Preset Contracts
       createSculptedPaperTrunkGeometry(),
       createFoldedPaperLimbGeometry(),
       createFoldedPaperLeafGeometry(),
+      createGnarledFallenLogGeometry(),
+      createFoldedTrailSignGeometry(),
       createOrigamiFloatingLeafGeometry(),
       buildGuardianSculptedSheetGeometry(),
     ]) {

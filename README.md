@@ -1,4 +1,4 @@
-![Little Nis — Bernheim Forest Paper & Watercolor WebGPU Diorama](screenshots/initial-state.webp)
+![Little Nis — Bernheim Forest Paper & Watercolor WebGPU Diorama](screenshots/demo.gif)
 
 # Paper-Wrapper Worlds — Little Nis (Bernheim Forest)
 
@@ -29,7 +29,7 @@ npm run dev
 - **Sweep to Wake the Wash**: Move the brush cursor across the raw paper margin to bloom autumn pigment and bast-fiber detail along the edge of the woodland clearing.
 - **Drag to Orbit & Touch Holly Pond**: Drag anywhere on the diorama to turn Little Nis in the clearing light, or click and sweep across the pond to send capillary ripples through his reflection.
 
-All solid geometry (the sculpted origami face and arms, 776 tucked wooden courses, radially fanned russet collar, 6-layer torn woodland island, and pleated birch crowns) renders in a unified TSL node pipeline (`paperCraftShader.ts`, `watercolorPondShader.ts`). Pigment glazes evaluate **Kubelka-Munk 2-flux radiative transfer** ($\coth(b S d)$) directly against warm unbleached Washi paper (`#f2ebd9`) with sinuous bast-fiber FBM grain and evaporative contact-line pinning (*Fuchidori* `縁取り`).
+All solid geometry (the plank-wrapped head and hooded downcast face, `930` staggered salvaged-wood shingle courses, mixed cedar-and-driftwood collar ruff, 3D box-plank shoreline hands, stepped wet-mud bank lip, crooked fallen logs, folded trailhead placard, and `54` forked `5`-shoot late-autumn hardwood branch lattices) renders in a unified TSL node pipeline (`paperCraftShader.ts`, `watercolorPondShader.ts`) over a continuous cold-press Washi backdrop (`scene.backgroundNode`). Pigment glazes evaluate **Kubelka-Munk 2-flux radiative transfer** ($\coth(b S d)$) directly against warm unbleached Washi paper (`#f2ebd9`) with sinuous kozo bast fibers and evaporative contact-line pinning (*Fuchidori* `縁取り`).
 
 ## Tech Stack
 

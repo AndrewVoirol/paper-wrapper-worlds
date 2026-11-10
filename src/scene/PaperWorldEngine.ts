@@ -9,7 +9,12 @@ import {
   type SimulationParams,
   type TelemetryState,
 } from '../types';
-import { PaperSceneUniforms, WATER_LEVEL_Y, evalShorelineZJS } from '../shaders/paperCraftShader';
+import {
+  PaperSceneUniforms,
+  WATER_LEVEL_Y,
+  evalShorelineZJS,
+  createWashiBackdropNode,
+} from '../shaders/paperCraftShader';
 import {
   generateGuardianShingles,
   createGuardianInstancedMesh,
@@ -115,11 +120,13 @@ export class PaperWorldEngine {
     this.renderer.domElement.style.height = '100%';
     this.container.appendChild(this.renderer.domElement);
 
-    // Scene setup with warm unbleached Washi rag paper background
+    // Scene setup with continuous tactile handmade Washi rag paper sheet (`0.000` seam)
     this.scene = new THREE.Scene();
     const initialPalette = PALETTE_PRESETS[0];
     this.scene.background = new THREE.Color(initialPalette.paperBgHex);
+    this.uniforms.uSheetAspect.value = width / height;
     this.uniforms.applyPalette(initialPalette);
+    (this.scene as any).backgroundNode = createWashiBackdropNode(this.uniforms);
 
     // Camera & OrbitControls
     const initialPreset = CAMERA_PRESETS[0];
@@ -235,6 +242,7 @@ export class PaperWorldEngine {
     this.viewportWidth = width;
     this.viewportHeight = height;
     this.camera.aspect = width / height;
+    this.uniforms.uSheetAspect.value = width / height;
     // Update target offset if crossing compact/wide breakpoint while staying smoothly framed
     this.setScrollProgress(this.scrollProgress, width < 920, false);
     this.applyCameraProjection();
