@@ -2,6 +2,8 @@
 
 # Paper-Wrapper Worlds — Little Nis (Bernheim Forest)
 
+**Live Folio:** [little-nis.andrewvoirol.com](https://little-nis.andrewvoirol.com) · **Case Study:** [andrewvoirol.com/work/little-nis](https://andrewvoirol.com/work/little-nis)
+
 A scroll-choreographed **Three.js `r187` `WebGPURenderer` + `TSL` (`three/tsl`)** folklore folio telling the story of **Little Nis**—the curious young wooden giant built by Thomas Dambo from reclaimed regional wood beside Holly Pond in Kentucky’s **Bernheim Arboretum and Research Forest** (*Forest Giants in a Giant Forest*, 2019)—rendered in folded cold-press Washi paper and multi-layer watercolor washes.
 
 ## Quick Start
@@ -9,7 +11,7 @@ A scroll-choreographed **Three.js `r187` `WebGPURenderer` + `TSL` (`three/tsl`)*
 Requires Node.js `20+`.
 
 ```bash
-git clone https://github.com/andrewvoirol/paper-wrapper-worlds.git
+git clone https://github.com/AndrewVoirol/paper-wrapper-worlds.git
 cd paper-wrapper-worlds
 npm install
 npm run dev
